@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+runs/
+assets/g1/assets/
+.DS_Store
