@@ -82,13 +82,18 @@ references cost additional space. The current inventory does not fetch them.
 Use bounded-memory conversion and training shards; loading this corpus as one
 GPU array is a separate scaling problem from indexing its metadata.
 
-Public viewer code at `bones-studio/seed-viewer@d9963c21bee413e7eb63c1b88ae01cdcb2cf3601`
-describes a headered 120 Hz G1 CSV with root translation/rotation fields and joint
-DOFs, interpreted as centimeters/degrees. That differs from xmimic's original
-headerless LAFAN qpos input. The current archives have not been inspected, so no
-converter is claimed from that viewer evidence alone. Read each SOMA BVH's frame
-time and channel declarations when converting; do not silently reinterpret 120 Hz
-source data as the LAFAN 30 Hz source.
+Bounded inspection of two actual SOMA-uniform BVH headers through private Catalog
+confirmed that translation channels can occur below the root. Parse every joint's
+declared channel sequence and the full hierarchy; do not assume one translating
+root followed only by rotating joints. Read each file's literal `Frame Time`,
+preserving it alongside the metadata's nominal rate. The inspected headers did
+not declare physical units, so G1-specific unit conversions are not evidence for
+SOMA. Do not reinterpret the source as the LAFAN 30 Hz format.
+
+This inspected only a prefix of one archive, not motion rows, proportional
+skeletons, handedness, up-axis or corpus-wide consistency. The private inspection
+receipt records its byte limits and exact observations. No source converter or
+retargeter is claimed from those two headers.
 
 Temporal labels are separately pinned as
 `metadata/seed_metadata_v002_temporal_labels.jsonl`, SHA256
@@ -127,6 +132,9 @@ project, an existing HF credential and the private authenticated repository-tree
 plan. Keep the plan and transport directory outside version control. The run
 uses the existing production SDK profile, or an `SX_API_KEY` supplied through
 the secret environment; credentials never belong in command arguments.
+The live copy used `sentientx==0.2.6001+ge49f81e577a1` from
+`https://packages.sentientx.io/simple/` and `huggingface-hub==1.23.0`.
+Restoration needs the Catalog SDK and authorization; it does not need HF access.
 
 ```bash
 python tools/mirror_bones_seed.py mirror \
@@ -166,3 +174,28 @@ Preserve the journal and receipt.
 The pack is private internal source custody under the BONES-SEED license, not a
 public dataset or a new ownership claim. Derived training selections retain the
 source license and must separately enforce held-out membership and quality.
+
+## Completed custody evidence, 2026-11-07
+
+The private Catalog mirror completed with exit code 0. Both SOMA archives, all
+shapes and metadata are stored: 540 non-G1-archive files, 90,870,308,054 bytes.
+The broader repository snapshot also retains the already-copied G1 reference:
+541 files and 114,370,281,701 bytes. Every original-file source hash passed before
+publication. The immutable reconstruction manifest is SHA-256
+`7b97480d92b24790ce063697014307247514bb45b0fba80909a5096b25dbb3b5`.
+
+An independent read through Catalog matched all 647 expected pack members. With
+HF credentials absent and `HF_HUB_OFFLINE=1`, it restored and hash-checked the
+license, v004 metadata, base skeleton and the complete first 1 GiB chunk of
+`soma_uniform.tar.gz`. This is a sample restore plus complete membership checking;
+it is not a second full-corpus download.
+
+The restored parquet then produced the complete inventory again with PyArrow
+24.0.0: 142,220 motions, 71,132 originals, 71,088 mirrors and zero unresolved
+mirror parents. The offline inventory took 9.98 seconds on the transfer host.
+The inventory tool reports its own metadata-only scope; the separate custody
+receipt establishes archive acquisition and integrity. Private receipts and
+manifests are retained under ignored `data/bones_seed/r2-evidence/`.
+
+This completes source custody and HF-free source access. Archive extraction,
+SOMA conversion, retargeting, training admission and policy training remain open.

@@ -23,7 +23,7 @@ inventory do not establish a working full-corpus trainer or a qualified robot.
 | Source | Revision | Evidence and limit |
 |---|---|---|
 | Sentient-X/xmimic | `571715f02c51654dca07b5dfa6651d0e586ca93e` | MIT code and retained third-party notices; original trainer is G1-specific |
-| bones-studio/seed | `2f59b2077b9da34dd4e43618e705c7cb962c9a66` | Authorized v004 metadata inspected; [inventory evidence](bones-seed.md); motion archives not yet imported |
+| bones-studio/seed | `2f59b2077b9da34dd4e43618e705c7cb962c9a66` | Human source mirrored privately to R2; full source hashes, Catalog sample restore and HF-free inventory passed; [custody evidence](bones-seed.md) |
 | sx-embodiments inspected baseline | `982813f75255a0bca2c27dbf687c252825fcdebb` | Full-body and corrected static-body definitions diverge; owning composition work is separate |
 | Published G1 benchmark | upstream README and `results/` | Reported H100 performance, not reproduced in this change |
 
@@ -126,8 +126,8 @@ does not open hardware or return a training-readiness receipt.
    FK and motion of the corrected upper parts with the waist; preserve historical
    identities and coordinate order. Generate simulation assets through the owning
    layer, then qualify contacts, collisions, masses and drive parameters.
-2. Import pinned BONES-SEED source archives and temporal labels into governed
-   storage. For each original and mirror, retain source digests, annotations,
+2. Derive governed training selections from the mirrored SOMA source and temporal
+   labels. For each original and mirror, retain source digests, annotations,
    timebase, actor/take/group, license and an explicit disposition. Retarget SOMA
    source against each intended embodiment, checking entire trajectories,
    contacts, limits and feasibility. Keep rejected motions in the accounting.
@@ -162,7 +162,8 @@ cost. Fix thresholds and seeds before experiments. The published G1 return targe
 is a baseline reproduction criterion, not acceptance for every morphology.
 
 At this stage no H100 benchmark, managed-job traversal, policy training, physical
-robot motion or deployment has run. Full source download, retargeting, bounded
+robot motion or deployment has run. Source custody is complete, with an HF-free
+Catalog sample restore and complete metadata inventory. Retargeting, bounded
 training and exact recovery remain open.
 
 Local validation on 2026-11-07: 41 xmimic CPU tests passed, including fast/reference

@@ -112,6 +112,15 @@ a Sentient training milestone or route retargeting through G1. Verify the final
 readback with a SOMA archive chunk. Human-source custody excluding G1 is
 90,870,308,054 bytes.
 
+Read the source itself before choosing a BVH parser. A bounded R2 prefix inspection
+found translation channels below the root and rotating named terminal joints;
+parsers that assume only the root translates or that every terminal is an inert
+`End Site` lose source motion. Preserve literal frame time separately from nominal
+metadata fps. Neither inspected header established units, handedness or up-axis.
+The private `data/bones_seed/soma-header-inspection.json` records the two-header
+sample and limits (262,154 compressed / 1,464,320 decoded bytes, five tar entries).
+No motion rows or proportional skeletons were inspected.
+
 On 2026-11-07 the transport failure suite passed 34 tests with the installed SDK:
 
 ```bash
@@ -120,9 +129,28 @@ python -m unittest discover -s tests -p 'test_mirror_bones_seed.py' -q
 
 The live license-file smoke uploaded and read back 21,781 bytes through Catalog,
 SHA-256 `eb9b70b084e0a5dcda8465a4be2ba2f5b81e3c3800305c727777a3176defbc5f`.
-That proves this small-object traversal, not completion of the full mirror.
-The full-copy receipt, original-file hash checks and HF-free Catalog readback are
-the acceptance evidence for source custody. Training admission remains separate.
+The subsequent full mirror completed with exit code 0 and every original-file
+source hash verified. Human source excluding G1 is 90,870,308,054 bytes; the
+complete repository receipt covers 541 files / 114,370,281,701 bytes. Manifest
+SHA-256 is `7b97480d92b24790ce063697014307247514bb45b0fba80909a5096b25dbb3b5`.
+Independent Catalog access matched all 647 expected members. With no HF token
+and `HF_HUB_OFFLINE=1`, the license, metadata, base skeleton and one complete
+1 GiB SOMA-uniform chunk restored with matching hashes. This sample does not
+claim a second full-corpus readback. Training admission remains separate.
+
+Rebuild the inventory from the restored parquet:
+
+```bash
+HF_HUB_OFFLINE=1 python tools/prepare_bones_seed.py \
+  --metadata /private/catalog-restored/seed_metadata_v004.parquet \
+  --output /private/r2-inventory
+```
+
+With PyArrow 24.0.0 this took 9.98 seconds on the existing transfer host and
+returned 142,220 motions, 71,132 originals, 71,088 mirrors and zero unresolved
+mirror parents. Keep the metadata-only inventory receipt alongside the separate
+archive-custody receipt; neither retargeting nor training has run. Private evidence
+is under ignored `data/bones_seed/r2-evidence/`.
 Live checks also returned 401 for anonymous pack lookup/download access and 404
 for representation lookup from another authorized project. The public API does
 not return an `is_public` field; the owning registration path defaults it to false.
@@ -130,9 +158,11 @@ not return an `is_public` field; the owning registration path defaults it to fal
 | Failure/signature | Established cause | Correction |
 |---|---|---|
 | Importing the checkout SDK fails on missing generated `AssetRead` | Shared editable SDK/protobuf state differs from the released SDK | Use an isolated environment pinned to the installed release; do not rewrite another session's generated tree |
+| A noninteractive SSH session cannot find `uv` | The installed user binary is absent from that session's PATH | Resolve the installed executable explicitly; the transfer venv intentionally had neither pip nor PyArrow, so install the pinned PyArrow into that isolated environment |
 | A 45 GB archive exceeds worker scratch | Whole-file promotion materializes the source on the Catalog worker | Use bounded 1 GiB blobs through Catalog staging, with an ordered exact-byte manifest |
 | Upload succeeds but bytes cannot be read | Promotion alone does not confer entry-scoped access | Register private per-chunk packs, then the immutable final pack after full-source verification |
 | HF download is very slow on the laptop | The measured route took 124.14 s for 8 MiB; an existing datacenter worker took 0.63 s for identical bytes | Run the bounded transfer client near R2 through the same Catalog API; do not copy cloud credentials or bypass the owner |
+| Copying evidence back to the laptop is slow | Slow host-to-laptop transfer was observed; its network cause was not established | Run the offline inventory beside the Catalog-restored metadata; return compressed receipts with per-file hash checks rather than copying the parquet again |
 | A normal Git file fails SHA-1 verification | Git hashes the blob header plus contents | Verify `blob <size>\0` plus bytes; use raw SHA-256 for LFS contents |
 | A correctly hashed manifest restores zero files | Content hashing alone does not prove corpus completeness | Require the pinned normalized inventory, not self-declared counts |
 | Restore repeats completed archive chunks | Opening the partial file with `wb` discarded progress | Bind the journal to manifest identity, rehash retained boundaries and append |
