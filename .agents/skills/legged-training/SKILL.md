@@ -104,6 +104,14 @@ principal authorized to write a private project. The pinned snapshot is 541 file
 `b1b79bbce35df8749740373218e107763e0c514b68adfd763d0d8d8d2929c220`.
 Do not put the private plan, source bytes or credentials in git.
 
+The owner clarified that G1-retargeted motions are irrelevant to training their
+robots. Use SOMA human motion, shape parameters and metadata, then retarget
+directly to the canonical target embodiment. The full repository snapshot also
+contains the already-copied G1 reference archive; do not present its transfer as
+a Sentient training milestone or route retargeting through G1. Verify the final
+readback with a SOMA archive chunk. Human-source custody excluding G1 is
+90,870,308,054 bytes.
+
 On 2026-11-07 the transport failure suite passed 34 tests with the installed SDK:
 
 ```bash

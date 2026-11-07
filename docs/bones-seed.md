@@ -68,6 +68,14 @@ Sentient embodiment. G1 trajectories already embody another robot's geometry and
 joint ordering. A successful source inventory does not establish retargeting,
 full-path feasibility, contact validity, or simulation dynamics.
 
+The training source is the human SOMA motion data, shape parameters and metadata.
+Retarget directly from that source to the chosen canonical embodiment. The
+repository mirror also retains `g1.tar.gz` because it copies the entire published
+tree; that archive is an existing Unitree retarget and is not an input or an
+intermediate step for Sentient retargeting. Excluding it, the human-source files
+total 90,870,308,054 bytes. Storage completeness does not make every mirrored
+representation a training input.
+
 The three compressed motion archives total 114,156,145,800 bytes (114.16 GB).
 `soma_uniform.tar.gz` alone is 45,188,088,297 bytes. Uncompressed storage and derived
 references cost additional space. The current inventory does not fetch them.
