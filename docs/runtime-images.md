@@ -26,7 +26,9 @@ copy import roots or invent published internal package versions. The resulting
 `sentientx-0.0.0+src.<sourcehash>` is a local wheel only. The SDK builder's asset audit
 removes proprietary robot asset bytes. The ignored `data/runtime-images/manifest.json`
 records every selected owner/XMimic source-file hash, superproject and embodiment
-HEADs, package closure, wheel hash, and CPU/GPU dependency-lock hashes. HEAD alone
+HEADs, package closure, wheel hash, and CPU/GPU dependency-lock hashes. The embodiment
+revision comes from the superproject's mode-160000 gitlink, including archive-filled
+worktrees that have no nested `.git`. HEAD alone
 never identifies dirty source. Uncommitted and generated Python files are included
 in the source identity. A changed source snapshot or wheel fails image verification.
 

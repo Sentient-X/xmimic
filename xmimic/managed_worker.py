@@ -59,48 +59,83 @@ def _read(artifacts, name, limit):
     return path.read_bytes()
 
 
-def _copy(source, destination):
+@contextmanager
+def _staged_file(destination, staging=None):
+    """Admit complete derived bytes atomically; a kill leaves only disposable staging."""
+    destination = Path(destination)
+    staging = Path(staging) if staging is not None else destination.parent / '.materializing'
+    if 'raw' in destination.resolve().parts or destination.is_symlink() or staging.is_symlink():
+        raise ValueError('Materialization requires regular derived paths')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='pending-', dir=staging)
+    os.close(descriptor)
+    temporary = Path(temporary)
+    try:
+        yield temporary
+        with temporary.open('rb') as stream:
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, destination)  # exclusive, never overwrite admitted bytes
+        except FileExistsError:
+            if destination.is_symlink() or _digest(destination) != _digest(temporary):
+                raise ValueError('Retained output conflicts with current input') from None
+        descriptor = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _copy(source, destination, *, staging=None):
     """Idempotent materialization, never replace retained different bytes."""
     source, destination = Path(source), Path(destination)
     if source.is_symlink() or not source.is_file() or destination.is_symlink():
         raise ValueError('Program artifacts must be regular files')
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         if _digest(source) != _digest(destination):
             raise ValueError('Retained output conflicts with current input')
         return
-    with source.open('rb') as inp, destination.open('xb') as out:
-        shutil.copyfileobj(inp, out, 1024**2)
+    with _staged_file(destination, staging) as temporary:
+        with source.open('rb') as inp, temporary.open('wb') as out:
+            shutil.copyfileobj(inp, out, 1024**2)
 
 
-def _write(path, value):
-    encoded = canonical_json(value).encode()
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_bytes(path, encoded, *, staging=None):
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('Retained program artifact differs')
     if path.exists():
-        if path.is_symlink() or path.read_bytes() != encoded:
+        if path.read_bytes() != encoded:
             raise ValueError('Retained program artifact differs')
-    else:
-        with path.open('xb') as stream:
-            stream.write(encoded)
+        return
+    with _staged_file(path, staging) as temporary:
+        temporary.write_bytes(encoded)
 
 
-def _copy_prefix(artifacts, prefix, directory):
+def _write(path, value, *, staging=None):
+    _write_bytes(path, canonical_json(value).encode(), staging=staging)
+
+
+def _copy_prefix(artifacts, prefix, directory, *, staging=None):
     found = False
     for name, path in artifacts.items():
         if name.startswith(prefix + '/'):
             relative = Path(name.removeprefix(prefix + '/'))
             if relative.is_absolute() or '..' in relative.parts:
                 raise ValueError('Input path escapes its bundle')
-            _copy(path, directory / relative)
+            _copy(path, directory / relative, staging=staging)
             found = True
     if not found:
         raise ValueError(f'Missing {prefix} input bundle')
 
 
 @contextmanager
-def _body(artifacts, directory):
+def _body(artifacts, directory, *, staging=None):
     body = Embodiment.from_json(_read(artifacts, 'embodiment.json', 8*1024**2).decode())
-    _copy_prefix(artifacts, 'assets', directory)
+    _copy_prefix(artifacts, 'assets', directory, staging=staging)
     previous = os.environ.get('SX_EMBODIMENTS_ASSETS')
     os.environ['SX_EMBODIMENTS_ASSETS'] = str(directory)
     try:
@@ -114,20 +149,18 @@ def _body(artifacts, directory):
             os.environ['SX_EMBODIMENTS_ASSETS'] = previous
 
 
-def _manifest(directory, *, purpose, eligible, filename="artifact-manifest.json", selection=None):
+def _manifest(directory, *, purpose, eligible, filename="artifact-manifest.json", selection=None, staging=None):
     from sx_training.artifacts import ArtifactFile, ArtifactManifest
     manifest = ArtifactManifest(purpose, tuple(
         ArtifactFile(p.relative_to(directory).as_posix(), Sha256Digest(_digest(p)), p.stat().st_size)
-        for p in sorted(directory.rglob('*')) if p.is_file() and p.name != filename
+        for p in sorted(directory.rglob('*')) if p.is_file() and p.name not in {filename, 'training-receipt.json'}
         and (selection is None or p.relative_to(directory).as_posix() in selection)
     ), eligible)
     if any(f.size_bytes > MAX_OUTPUT_BYTES for f in manifest.files):
         raise ValueError('Output exceeds Catalog per-object limit; choose bounded source/compute shards')
     destination = directory / filename
     data = manifest.canonical_bytes()
-    if destination.exists() and destination.read_bytes() != data:
-        raise ValueError('Retained output manifest differs')
-    destination.write_bytes(data)
+    _write_bytes(destination, data, staging=staging)
 
 
 def retarget(context) -> Path:
@@ -148,10 +181,11 @@ def retarget(context) -> Path:
         raise ValueError('Explicit complete training profile required')
     profile = TrainingProfile(**raw_profile)
     work = context.run_dir / 'xmimic'
-    output = work / 'output'
+    staging = work / 'materializing'
+    output = context.run_dir / 'artifact'
     robot = output / 'robot'
-    _copy_prefix(artifacts, 'robot', robot)
-    with _body(artifacts, work / 'owner-assets') as body:
+    _copy_prefix(artifacts, 'robot', robot, staging=staging)
+    with _body(artifacts, work / 'owner-assets', staging=staging) as body:
         if str(body.id) != context.config['embodiment_id']:
             raise ValueError('Worker canonical body identity differs')
         receipt = verify_nominal_receipt(robot)
@@ -175,23 +209,23 @@ def retarget(context) -> Path:
     clip = document['clips'][context.config['clip_id']]
     for name, reference in clip['artifacts'].items():
         target = output / ('motion/clip.npz' if name == 'motion.npz' else 'diagnostics/' + name)
-        _copy(result.directory / 'blobs' / reference['sha256'], target)
-    _copy(result.directory / 'manifest.json', output / 'retarget-cache.json')
+        _copy(result.directory / 'blobs' / reference['sha256'], target, staging=staging)
+    _copy(result.directory / 'manifest.json', output / 'retarget-cache.json', staging=staging)
     _write(output / 'candidate.json', {
         'schema': 'xmimic.retarget-candidate/v1', 'cache_key': result.cache_key,
         'cache_manifest_sha256': result.manifest_sha256, 'embodiment_id': context.config['embodiment_id'],
         'source_group': context.config['source_group'], 'disposition': str(result.disposition),
         'training_admitted': False, 'inherited_training_eligible': inherited,
         'feasible': result.disposition is ClipDisposition.SUCCEEDED,
-    })
-    _copy(artifacts['recipe.json'], output / 'recipe.json')
-    _copy(artifacts['training-profile.json'], output / 'training-profile.json')
+    }, staging=staging)
+    _copy(artifacts['recipe.json'], output / 'recipe.json', staging=staging)
+    _copy(artifacts['training-profile.json'], output / 'training-profile.json', staging=staging)
     if result.disposition is ClipDisposition.SUCCEEDED:
         selection = {p.relative_to(output).as_posix() for p in robot.rglob('*') if p.is_file()}
         selection |= {'motion/clip.npz', 'candidate.json', 'retarget-cache.json', 'recipe.json', 'training-profile.json'}
         _manifest(output, purpose=ArtifactPurpose.TRANSFORM, eligible=inherited,
-                  filename='training-candidate.json', selection=selection)
-    _manifest(output, purpose=ArtifactPurpose.TRANSFORM, eligible=inherited)
+                  filename='training-candidate.json', selection=selection, staging=staging)
+    _manifest(output, purpose=ArtifactPurpose.TRANSFORM, eligible=inherited, staging=staging)
     return output
 
 
@@ -209,11 +243,12 @@ def _pack_state(directory, destination):
                 if digest != _digest(files[member.name]):
                     raise ValueError('Retained native archive bytes differ')
         return
-    with tarfile.open(destination, 'x:') as archive:
-        for path in sorted(directory.iterdir()):
-            if path.is_symlink() or not path.is_file():
-                raise ValueError('Native checkpoint contains non-file member')
-            archive.add(path, arcname=path.name, recursive=False)
+    with _staged_file(destination) as temporary:
+        with tarfile.open(temporary, 'w:') as archive:
+            for path in sorted(directory.iterdir()):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError('Native checkpoint contains non-file member')
+                archive.add(path, arcname=path.name, recursive=False)
 
 
 def _unpack_state(archive, directory, expected_binding):
@@ -272,9 +307,10 @@ def train(context) -> Path:
             or clips[0]['artifacts']['motion.npz']['sha256'] != _digest(artifacts['motion/clip.npz'])):
         raise ValueError('GPU motion bytes differ from the completed retarget record')
     work = context.run_dir / 'xmimic'
+    staging = work / 'materializing'
     robot, motion = work / 'robot', work / 'motion'
-    _copy_prefix(artifacts, 'robot', robot)
-    _copy_prefix(artifacts, 'motion', motion)
+    _copy_prefix(artifacts, 'robot', robot, staging=staging)
+    _copy_prefix(artifacts, 'motion', motion, staging=staging)
     receipt = verify_nominal_receipt(robot)
     meta = _json((robot/'meta.json').read_bytes())
     if (meta['embodiment_id'] != context.config['embodiment_id']
@@ -329,26 +365,26 @@ def train(context) -> Path:
                                       handle_signals=False))
     if context.stopping:
         context.interrupted()
-    output = work / 'output'
+    output = context.run_dir / 'artifact'
     output.mkdir(exist_ok=True)
     policies = sorted((work / 'logs').glob('ckpt_*.npz'))
     if not policies:
         raise ValueError('Training did not produce a deployable policy artifact')
-    _copy(policies[-1], output / 'policy.npz')
+    _copy(policies[-1], output / 'policy.npz', staging=staging)
     final = last[-1] if last else resume_from
     if final is None:
         raise ValueError('Training completed without recoverable state')
     final_archive = work / 'final-native-state.tar'
     _pack_state(final, final_archive)
-    export_recovery_archive(final_archive, output/'recovery')
+    export_recovery_archive(final_archive, output/'recovery', staging=staging)
     _write(output / 'run.json', {'schema': 'xmimic.managed-training/v1', 'binding': binding,
                                'iteration': _json((final/'manifest.json').read_bytes())['iteration'],
                                'requested_iterations': cfg.iterations,
-                               'physical_qualification': False})
+                               'physical_qualification': False}, staging=staging)
     return output
 
 
-def export_recovery_archive(archive: Path, destination: Path, *, chunk_bytes=MAX_OUTPUT_BYTES) -> Path:
+def export_recovery_archive(archive: Path, destination: Path, *, chunk_bytes=MAX_OUTPUT_BYTES, staging=None) -> Path:
     """Preserve the final opaque state in bounded Catalog objects, with byte-order identity.
 
     Intermediate snapshots remain under the managed runtime. This final export is
@@ -360,12 +396,14 @@ def export_recovery_archive(archive: Path, destination: Path, *, chunk_bytes=MAX
     if archive.is_symlink() or not archive.is_file() or 'raw' in destination.resolve().parts:
         raise ValueError('Recovery export requires regular derived paths')
     destination.mkdir(parents=True, exist_ok=True)
+    staging = Path(staging) if staging is not None else destination.parent / '.materializing'
+    staging.mkdir(parents=True, exist_ok=True)
     whole, offset, records = hashlib.sha256(), 0, []
     with archive.open('rb') as source:
         while offset < archive.stat().st_size:
             name = f'part-{len(records):06d}.bin'
             target = destination/name
-            descriptor, temporary = tempfile.mkstemp(prefix='.partial-', dir=destination)
+            descriptor, temporary = tempfile.mkstemp(prefix='.partial-', dir=staging)
             sha, size = hashlib.sha256(), 0
             with os.fdopen(descriptor, 'wb') as output:
                 while size < chunk_bytes:
@@ -392,7 +430,7 @@ def export_recovery_archive(archive: Path, destination: Path, *, chunk_bytes=MAX
         raise ValueError('Empty or changed recovery archive')
     index = destination/'index.json'
     _write(index, {'schema':'xmimic.recovery-chunks/v1','size_bytes':offset,'sha256':whole.hexdigest(),
-                   'chunk_bytes':chunk_bytes,'chunks':records})
+                   'chunk_bytes':chunk_bytes,'chunks':records}, staging=staging)
     return index
 
 

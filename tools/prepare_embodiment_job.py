@@ -51,6 +51,8 @@ def prepare(body, source, nominal_bytes, recipe_bytes, training_bytes, *, source
     if dict(nominal.passive_holds) != dict(recipe.target.nominal_passive):
         raise ValueError('Simulation and retarget passive projections differ')
     clip = parse_soma_bvh(source,world_from_source=recipe.world_from_source)
+    if clip.frame_count < 2 or (clip.frame_count-1)*clip.frame_time_s < .02:
+        raise ValueError('Source must span at least one 50 Hz control step')
     clip.joint_index(recipe.source_root)
     for mapping in recipe.target.landmarks:
         clip.joint_index(mapping.source)

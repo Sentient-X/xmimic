@@ -113,3 +113,81 @@ def test_final_recovery_chunks_cross_boundaries_and_verify_identity(tmp_path, mu
         with pytest.raises(ValueError):
             restore_recovery_archive(parts,tmp_path/'restored.tar')
         assert not (tmp_path/'restored.tar').exists()
+
+
+def test_actual_runtime_executes_retarget_and_replays_complete_receipt(tmp_path, monkeypatch):
+    from sx_training import execute, verify_receipt
+    from sx_contracts.identity import content_digest
+
+    context = context_fixture(tmp_path, monkeypatch)
+    output = execute(context)
+    assert output == context.run_dir / 'artifact'
+    before = (output/'training-receipt.json').read_bytes()
+    verify_receipt(output, spec_digest=content_digest(context.inputs['spec']))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('receipt recovery recomputed retarget')
+    monkeypatch.setattr('xmimic.retarget_workflow.solve_sequence', forbidden)
+    assert execute(context) == output
+    assert (output/'training-receipt.json').read_bytes() == before
+
+
+def test_interrupted_materialization_does_not_admit_partial_bytes(tmp_path, monkeypatch):
+    import shutil
+    from xmimic.managed_worker import _copy, _write
+    source = tmp_path/'source.bin'
+    source.write_bytes(b'complete authoritative source')
+    target = tmp_path/'artifact'/'copy.bin'
+    staging = tmp_path/'staging'
+    original = shutil.copyfileobj
+    def interrupted(inp, out, length):
+        out.write(inp.read(4))
+        raise InterruptedError('simulated termination during copy')
+    with monkeypatch.context() as patch:
+        patch.setattr(shutil, 'copyfileobj', interrupted)
+        with pytest.raises(InterruptedError):
+            _copy(source, target, staging=staging)
+    assert not target.exists()
+    _copy(source, target, staging=staging)
+    assert target.read_bytes() == source.read_bytes()
+    assert original is shutil.copyfileobj
+    manifest = tmp_path/'artifact'/'record.json'
+    from pathlib import Path
+    write = Path.write_bytes
+    def partial_json(path, data):
+        write(path, data[:4])
+        raise InterruptedError('simulated termination during JSON write')
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'write_bytes', partial_json)
+        with pytest.raises(InterruptedError):
+            _write(manifest, {'complete': True}, staging=staging)
+    assert not manifest.exists()
+    _write(manifest, {'complete': True}, staging=staging)
+    assert json.loads(manifest.read_bytes()) == {'complete': True}
+    assert not list(staging.iterdir())
+
+
+def test_native_checkpoint_archive_recovers_after_mid_member_interruption(tmp_path, monkeypatch):
+    import tarfile
+    from xmimic.managed_worker import _pack_state
+    state = tmp_path/'native'
+    state.mkdir()
+    (state/'000000.npy').write_bytes(b'authoritative numeric bytes')
+    (state/'manifest.json').write_bytes(b'authoritative manifest')
+    archive = tmp_path/'native-state.tar'
+    original = tarfile.TarFile.add
+    calls = []
+    def interrupted(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise InterruptedError('simulated termination between members')
+        return original(self, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(tarfile.TarFile, 'add', interrupted)
+        with pytest.raises(InterruptedError):
+            _pack_state(state, archive)
+    assert not archive.exists()
+    assert (state/'000000.npy').read_bytes() == b'authoritative numeric bytes'
+    _pack_state(state, archive)
+    _pack_state(state, archive)
+    with tarfile.open(archive) as bundle:
+        assert set(bundle.getnames()) == {'000000.npy', 'manifest.json'}

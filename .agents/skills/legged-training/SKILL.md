@@ -250,3 +250,14 @@ simulation approval, exactbodyassets and a feasible whole-clip mapping. Stop bef
 GPU learning on rejection, missingancestry, changedstatebinding, absentpublishedimage
 or unavailableauthoringcontract. Keep licensing, original/mirrorfamilies and heldout
 membership. Nothing in this procedure commands physicalrobotmotion.
+
+
+Independent refutation caught the worker's wrong outputdirectory and interrupted
+materialization poisoning an otherwise intact checkpoint. The corrected worker returns
+`context.run_dir / "artifact"`; the test runs `sx_training.execute(context)` twice,
+checks the owner receipt and forbids a second solver call. Native tars, copiedfiles,
+JSON and manifests are admitted only after complete staged writes, with staging outside
+the published artifactclosure. Mid-copy/mid-tar/mid-JSON failure tests refusepartial
+admission and succeed onretry. The image provenance now reads the superproject's
+mode160000 gitlink; `git rev-parse` inside an archive-filled submodule reports the
+parent HEAD and is not embodiment evidence.

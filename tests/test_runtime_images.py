@@ -1,6 +1,9 @@
 """Runtime build custody checks; no Docker, registry, network, or paid execution."""
 
 import importlib.util
+import io
+import subprocess
+import tarfile
 import json
 from pathlib import Path
 import zipfile
@@ -74,3 +77,61 @@ def test_explicit_build_inputs_and_untracked_python_have_source_identity(tmp_pat
             tmp_path, [tmp_path / "Dockerfile.cpu", tmp_path / "uv.lock", code]
         )
     ) == {"Dockerfile.cpu", "uv.lock", "code/new.py"}
+
+
+def test_archived_embodiment_records_gitlink_not_containing_repository_head(tmp_path):
+    def git(root, *arguments):
+        return subprocess.check_output(["git", "-C", str(root), *arguments]).strip()
+
+    child = tmp_path / "child"
+    child.mkdir()
+    git(child, "init", "-q")
+    (child / "exporter.py").write_text("def export(): pass\n")
+    git(child, "add", "exporter.py")
+    git(
+        child,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "exporter",
+    )
+    pinned = git(child, "rev-parse", "HEAD").decode()
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    git(parent, "init", "-q")
+    git(
+        parent,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{pinned},packages/sx-embodiments",
+    )
+    (parent / "ordinary").mkdir()
+    (parent / "ordinary/file.py").write_text("pass\n")
+    git(parent, "add", "ordinary")
+    git(
+        parent,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "pin member",
+    )
+    filled = parent / "packages/sx-embodiments"
+    filled.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(git(child, "archive", "HEAD"))) as archive:
+        archive.extractall(filled, filter="data")
+    assert not (filled / ".git").exists()
+    assert (filled / "exporter.py").read_text() == "def export(): pass\n"
+    # The old nested rev-parse silently discovers the containing repository.
+    assert module.git_head(filled) == module.git_head(parent) != pinned
+    assert module.gitlink_head(parent, "packages/sx-embodiments") == pinned
+    with pytest.raises(ValueError, match="mode 160000"):
+        module.gitlink_head(parent, "ordinary")
+    with pytest.raises(ValueError, match="one committed gitlink"):
+        module.gitlink_head(parent, "missing")

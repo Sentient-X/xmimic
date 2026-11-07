@@ -72,6 +72,28 @@ def git_head(root: Path) -> str:
     ).strip()
 
 
+def gitlink_head(root: Path, relative: str) -> str:
+    """Read the committed pin even when the member is filled from a Git archive."""
+    records = subprocess.check_output(
+        ["git", "-C", str(root), "ls-tree", "-z", "HEAD", "--", relative]
+    ).split(b"\0")
+    if len(records) != 2 or records[-1] != b"":
+        raise ValueError(f"expected one committed gitlink for {relative}")
+    header, separator, name = records[0].partition(b"\t")
+    fields = header.split()
+    if (
+        not separator
+        or name.decode() != relative
+        or len(fields) != 3
+        or fields[:2] != [b"160000", b"commit"]
+    ):
+        raise ValueError(f"expected mode 160000 gitlink for {relative}")
+    revision = fields[2].decode("ascii")
+    if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
+        raise ValueError("gitlink must name an exact SHA-1 commit")
+    return revision
+
+
 def verify(directory: Path, *, source: Path = ROOT) -> dict:
     manifest = json.loads((directory / "manifest.json").read_bytes())
     for name, digest in manifest["xmimic_files"].items():
@@ -225,7 +247,7 @@ def main() -> None:
     manifest = {
         "schema": "xmimic.runtime-images/v1",
         "sdk_head": git_head(owner),
-        "embodiment_head": git_head(owner / "packages/sx-embodiments"),
+        "embodiment_head": gitlink_head(owner, "packages/sx-embodiments"),
         "sdk_source_sha256": sdk_sha,
         "sdk_files": sdk_files,
         "xmimic_head": git_head(ROOT),
