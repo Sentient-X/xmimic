@@ -86,7 +86,8 @@ class RunLog:
         self.args_meta = {**args_meta, "embodiment_id": xm.meta.get("embodiment_id")}
         self.cols = self.COLS + list(extra_cols)
         self.f = open(os.path.join(cfg.log_dir, "train_log.csv"), "a")
-        self.f.write(",".join(self.cols) + "\n")
+        if self.f.tell() == 0:
+            self.f.write(",".join(self.cols) + "\n")
         self.acc, self.t_log, self.it_log, self.decay_at = [], time.time(), 0, -1
         self.unflat = make_unflat(avg_template)
         self.pool = concurrent.futures.ThreadPoolExecutor(1)
@@ -195,3 +196,30 @@ def run_pipelined(dispatch, log, iterations, max_minutes=0.0, on_done=None):
 def write_json(path, obj):
     with open(path, "w") as f:
         json.dump(obj, f, indent=1)
+
+
+def run_synchronized(dispatch, log, iterations, *, start_iteration=0,
+                     max_minutes=0.0, checkpoint_every, checkpoint, stop_requested=lambda: False):
+    """Managed mode: finish each bounded chunk before donation, snapshot or stop.
+
+    Unlike run_pipelined this intentionally waits at boundaries. ``checkpoint(it)``
+    synchronously persists the complete state, including on time/stop termination.
+    A raised computation/log/checkpoint error propagates; it is never success.
+    """
+    it, saved = start_iteration, None
+    try:
+        while it < iterations and not stop_requested():
+            it, stats, avg_flat = dispatch()
+            jax.block_until_ready((stats, avg_flat))
+            log.submitted(it, stats)
+            minutes = log.add(it, stats, avg_flat)
+            if it % checkpoint_every == 0:
+                checkpoint(it)
+                saved = it
+            if max_minutes > 0 and minutes >= max_minutes:
+                break
+        if saved != it:
+            checkpoint(it)
+    finally:
+        log.close()
+    return it

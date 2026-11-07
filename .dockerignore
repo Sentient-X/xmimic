@@ -1,0 +1,15 @@
+**
+!Dockerfile.cpu
+!Dockerfile.gpu
+!.dockerignore
+!requirements.txt
+!xmimic/
+!xmimic/**/*.py
+!tools/
+!tools/build_runtime_wheels.py
+!data/
+!data/runtime-images/
+!data/runtime-images/manifest.json
+!data/runtime-images/wheels/
+!data/runtime-images/wheels/*.whl
+!data/runtime-images/*.lock

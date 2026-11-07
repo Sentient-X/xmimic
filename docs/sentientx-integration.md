@@ -15,8 +15,10 @@ and held-out quarantine. The training platform owns job authority, placement,
 cost/deadline limits and durable artifacts. Do not copy robot constants here or
 create a second scheduler, catalog or checkpoint authority.
 
-This is an implementation in progress. CPU boundary tests and a complete metadata
-inventory do not establish a working full-corpus trainer or a qualified robot.
+The [managed training workflow](managed-training.md) now implements CPU retargeting,
+immutable local/Catalog cache custody and single-GPU authored execution. Runtime
+publication and live GPU qualification remain separate; this is not a qualified
+whole-corpus trainer or physical robot.
 
 ## Pinned source model
 
@@ -52,15 +54,16 @@ two contact bodies and implicit 29-column joint ordering are incidental.
 - [BONES-SEED inventory](bones-seed.md) preserves every metadata row and groups
   originals/mirrors without dropping motions whose durations differ.
 
-Robot bundles must be derived by the owning embodiment/simulation layer. This
-change does not yet implement that exporter. Supplying a string `embodiment_id`
+Robot bundles must be derived by the owning embodiment/simulation layer. The nominal exporter now lives in
+`sx_embodiments.nominal_mujoco`, with a separately hashed assumption profile. Supplying a string `embodiment_id`
 does not authenticate a bundle or prove it was derived from that body. The loader
 checks local model consistency, not a platform admission signature.
 
 Current simulator limits remain explicit: one floating root, scalar revolute
 coordinates with direct position actuators, 5 ms physics and 50 Hz control.
 Prismatic, ball, coupled or passive dynamic coordinates need a supported model
-projection before admission. Do not invent actuator gains to pass this boundary.
+projection before admission. The owner explicitly approved labelled nominal actuator assumptions for simulation;
+those assumptions must never overwrite physical drive facts.
 `meta.json` also carries the existing kinematics, randomization and solver facts
 used by XMimic; a correct joint-address check alone does not qualify those facts.
 
@@ -135,15 +138,15 @@ does not open hardware or return a training-readiness receipt.
    sampling, persistent per-source failure statistics and batched evaluation.
    Current `load_motion` still loads all selected frames. Full BONES-SEED training
    is not implemented by the metadata inventory or NPZ parser.
-4. Add complete restart state: model/critic/policy and optimizers, normalizers,
-   RNGs, replay, simulator and randomized parameters, counters, sampler and probes.
-   Existing policy-export NPZ checkpoints cannot resume paid training exactly.
+4. Qualify the implemented complete restart state on actual GPU/Warp execution.
+   CPU/JAX continuation tests preserve optimizers, normalizers, RNGs, replay,
+   simulator/randomized parameters, counters, sampler and probes; policy-export
+   NPZ checkpoints alone still cannot resume paid training.
 5. Bind the program to the platform's authored-trainer contract. Local inspected
    `sx_training.TrainingContext` provides staged data, logging, checkpoint/restore,
    stop handling and artifact output; that implementation is work in progress,
-   not verified published/deployed support. Current local admission supports one
-   GPU and native episode corpora; arbitrary motion artifacts and multi-GPU
-   placement require owning platform changes. Do not bypass those restrictions
+   not verified published/deployed support. The companion owning changes admit CPU transforms and one-GPU learning over
+   private named motion artifacts. Multi-GPU authored placement remains unsupported. Do not bypass those restrictions
    with direct database writes or a standalone cloud launcher.
 
 ## Acceptance and evidence
@@ -163,8 +166,8 @@ is a baseline reproduction criterion, not acceptance for every morphology.
 
 At this stage no H100 benchmark, managed-job traversal, policy training, physical
 robot motion or deployment has run. Source custody is complete, with an HF-free
-Catalog sample restore and complete metadata inventory. Retargeting, bounded
-training and exact recovery remain open.
+Catalog sample restore and complete metadata inventory. CPU retargeting and exact CPU/JAX recovery have local evidence; bounded
+GPU training and recovery still require hosted qualification.
 
 Local validation on 2026-11-07: 41 xmimic CPU tests passed, including fast/reference
 reward equivalence for unequal contact heights. The companion embodiment candidate

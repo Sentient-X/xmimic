@@ -1,5 +1,8 @@
 # XMimic
 
+SentientX embodiment support: [managed CPU retargeting, persistent cache and GPU training](docs/managed-training.md). The Sentient actuator profile is explicitly nominal for simulation; no physical qualification is claimed.
+
+
 SentientX's legged-embodiment integration is in progress. The first changes add
 explicit robot/contact/mirror metadata, embodiment-bound retargeted motion input,
 and a complete BONES-SEED metadata inventory with private Catalog/R2 mirroring. See the

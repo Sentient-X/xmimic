@@ -194,3 +194,59 @@ completion does not establish full-corpus training scalability. Policy exports
 are not recovery checkpoints. Verify the authored trainer API is actually released
 before reporting managed integration. No physical motion or run expected to exceed
 the repository's approval threshold starts without the user's authorization.
+
+
+## Managed retarget/cache/training candidate (2026-11-08)
+
+The implementation is in `xmimic.managed_worker`, `retarget_workflow`,
+`artifact_cache`, `checkpoint` and `managed_pipeline`. Run `tools/prepare_embodiment_job.py`
+with a canonical body document or registered name, source BVH and explicit profiles;
+`tools/managed_train.py` performs private publication and the CPU→GPU Job handoff.
+See [managed training](../../../docs/managed-training.md) for execution bounds and
+[runtime images](../../../docs/runtime-images.md) for the currently unqualified build boundary.
+
+The owning nominal exporter commit is `96aabf07e16427d2c8e0006984cdd8d6d7e2d7cc`
+(parent93141cd), separate from the corrected-body composition proposal. Its clean
+archive decoded the portable39-coordinate development body and prepared the same
+URDF/profile/target hashes in1.89seconds. Canonical body identity is not a registered
+alias update, active station assignment or hardware calibration.
+
+Observed real-source evidence: the first599-frame SOMA clip took86.45seconds on CPU.
+At fixed2mm/0.01rad residual limits,423frames passed and176failed; maximum wrist
+position residual23.863mm. The whole clip was rejected, with all599candidateframes
+and residuals retained. No motion.npz or training candidate was minted for it.
+The first8frames were feasible in0.343seconds; that bounded experiment did not admit
+the complete source clip. Never silently crop, widen thresholds after seeing a result,
+or report self-authored solver residuals as contact/balance qualification.
+
+A synthetic whole-clip test runs the actual `TrainingContext`, canonical owner export,
+CPU solver and immutable cache. Independent donated-JAX continuation restores replay,
+optimizer, RNG, normalizers and randomized simulator constants exactly. Final complete
+recovery is chunked for Catalog's1GiB/file limit; it still requires binding/template
+validation when restoring. These tests do not establish actual Warp/GPU continuation.
+
+```bash
+# Use the exact owner checkout's generated proto and portable runtime without
+# rewriting another session's shared editable installation.
+PYTHONPATH=".:$OWNER/packages/sx-training:$OWNER/packages/sx-protocol/generated/python:$EMBODIMENTS" \
+JAX_PLATFORMS=cpu python -m pytest tests/test_retarget_source.py \
+  tests/test_retarget_target.py tests/test_retarget_workflow.py \
+  tests/test_managed_worker.py tests/test_managed_pipeline.py \
+  tests/test_artifact_cache.py tests/test_checkpoint.py tests/test_embodiment_bundle.py -q
+```
+
+| Failure | Cause | Correction |
+|---|---|---|
+| SOMA root/limb translations doubled | Declared translation channels replace BVH OFFSET | Honor channels on every joint; preserve virtual root and intrinsicEulerorder |
+| Human hand target lies below the shorter robot arm | One root-relative scalar does not preserve limb proportions | Normalize declared source segments to owner-FK limb lengths; retain explicitanchors/holds |
+| MuJoCo rejects full inertia with orientation | URDF tensor and inertial frame were both transferred | Rotate tensor into linkframe before writing fullinertia |
+| Saved MJX fingerprint changes across processes | Static pytree repr embeds processaddresses | Fingerprint static array contents/types and scalar metadata |
+| Rejected retarget loses paid coordinates | Cache forbade all unsuccessful artifacts | Retain diagnostics with training_admitted=false and no motion.npz |
+| Reusing a completed cache reruns paid work | Caller ignored retained stage/operation identities | Verify content and reattach exact job; ambiguous acknowledgement refusesfreshwork |
+| SDK wheel omits new runtime's dependency | Builder scanned packages/ only, Waddle lives underautonomy/ | Resolve the declaredworkspace closure through owning SDKbuilder |
+
+Preconditions: approved source access, privateCatalogsourcecustody, explicitnominal
+simulation approval, exactbodyassets and a feasible whole-clip mapping. Stop before
+GPU learning on rejection, missingancestry, changedstatebinding, absentpublishedimage
+or unavailableauthoringcontract. Keep licensing, original/mirrorfamilies and heldout
+membership. Nothing in this procedure commands physicalrobotmotion.
