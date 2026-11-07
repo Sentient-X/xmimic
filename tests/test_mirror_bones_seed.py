@@ -463,6 +463,91 @@ class SDKAdapterTests(unittest.TestCase):
                     m.CatalogStore(Client(), "pack", catalog_factory=factory).operation_result(object())
             self.assertEqual(len(calls), expected_calls)
 
+    def test_transient_part_response_refreshes_grant_and_replays_identical_range(self):
+        import io
+        from uuid import UUID
+        grants, payloads = [], []
+        def grant(uid, number):
+            grants.append((uid, number))
+            return SimpleNamespace(url=f"https://private.example/part?secret={len(grants)}")
+        def handle(request):
+            payloads.append(request.content)
+            return httpx.Response(503 if len(payloads) == 1 else 200,
+                                  headers={"etag": "part-etag"}, content=b"private server details")
+        store = m.CatalogStore(SimpleNamespace(staging_upload_part=grant), "pack",
+                               httpx.Client(transport=httpx.MockTransport(handle)))
+        uid = UUID(int=1)
+        with patch.object(m.time, "sleep") as sleep, patch.object(m, "progress") as log:
+            etag = store.upload_part(io.BytesIO(b"prePAYLOADsuffix"), uid, 15, 3, 7)
+        self.assertEqual(etag, "part-etag")
+        self.assertEqual(payloads, [b"PAYLOAD", b"PAYLOAD"])
+        self.assertEqual(grants, [(uid, 15), (uid, 15)])
+        sleep.assert_called_once_with(2)
+        facts = log.call_args.kwargs
+        self.assertEqual((facts["http_status"], facts["part_number"]), (503, 15))
+        self.assertNotIn("secret", str(log.call_args_list))
+        self.assertNotIn("private server", str(log.call_args_list))
+
+    def test_nontransient_part_response_stops_without_retry(self):
+        import io
+        calls = []
+        def handle(request):
+            calls.append(request); return httpx.Response(403, content=b"private response")
+        store = m.CatalogStore(SimpleNamespace(staging_upload_part=lambda *args:
+            SimpleNamespace(url="https://private.example/part")), "pack",
+            httpx.Client(transport=httpx.MockTransport(handle)))
+        with patch.object(m.time, "sleep") as sleep:
+            with self.assertRaises(m.MultipartTransferError) as raised:
+                store.upload_part(io.BytesIO(b"data"), "upload", 15, 0, 4)
+        self.assertEqual(len(calls), 1); sleep.assert_not_called()
+        self.assertEqual(m.failure_facts(raised.exception), {"error_type": "MultipartTransferError",
+            "reason": "multipart_http_failure", "http_status": 403, "part_number": 15})
+        self.assertNotIn("private", str(raised.exception))
+
+    def test_part_retry_preserves_saved_etags_and_never_restarts_upload_or_registration(self):
+        try:
+            from sx_catalog_client.client import InitiatedStagingUpload
+            from sx_contracts.operations import OperationRef
+        except (ImportError, AttributeError): self.skipTest("Run with installed sentientx Python")
+        from uuid import UUID
+        uid = UUID(int=1)
+        sha = hashlib.sha256(b"abcdefgh").hexdigest()
+        for statuses in ((503, 200), (503, 503, 503)):
+            begins, grants, payloads, registrations, completions = [], [], [], [], []
+            state = {"parts": {"1": "retained-etag"}}
+            class Catalog:
+                def begin_staging_upload(self, *args):
+                    begins.append(args); return InitiatedStagingUpload(uid, "s3://private/staging", 4, 60)
+                def staging_upload_part(self, upload, number):
+                    grants.append((upload, number)); return SimpleNamespace(url="https://private.example/part")
+                def complete_staging_upload(self, upload, **kwargs):
+                    completions.append(kwargs["parts"]); return SimpleNamespace(source_uri="s3://private/staging")
+                def register(self, request):
+                    registrations.append(request)
+                    return SimpleNamespace(ref=OperationRef.parse("experience/asset-registration/id"), resource_ref="asset:"+sha)
+                def result(self, *args, **kwargs): return sha
+                def register_asset_pack(self, *args): pass
+            def handle(request):
+                payloads.append(request.content)
+                return httpx.Response(statuses[len(payloads)-1], headers={"etag": "new-etag"})
+            store = m.CatalogStore(Catalog(), "pack", httpx.Client(transport=httpx.MockTransport(handle)))
+            with self.subTest(statuses=statuses), tempfile.TemporaryDirectory() as directory, patch.object(m.time, "sleep") as sleep, patch.object(m, "progress"):
+                path = Path(directory).resolve()/"chunk"; path.write_bytes(b"abcdefgh")
+                if statuses[-1] == 200:
+                    store.put(path, sha, 8, state, lambda: None)
+                    self.assertEqual(state["parts"], {"1": "retained-etag", "2": "new-etag"})
+                    self.assertEqual([(p.part_number, p.etag) for p in completions[0]], [(1, "retained-etag"), (2, "new-etag")])
+                    self.assertEqual(len(registrations), 1)
+                else:
+                    with self.assertRaises(m.MultipartTransferError): store.put(path, sha, 8, state, lambda: None)
+                    self.assertEqual(state["parts"], {"1": "retained-etag"})
+                    self.assertNotIn("operation", state)
+                    self.assertEqual(registrations, []); self.assertEqual(completions, [])
+                    self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 5])
+                self.assertEqual(len(begins), 1)
+                self.assertEqual(grants, [(uid, 2)]*len(statuses))
+                self.assertEqual(payloads, [b"efgh"]*len(statuses))
+
     def test_non_https_upload_grant_is_refused_before_bytes_leave(self):
         try:
             from sx_catalog_client.client import InitiatedStagingUpload

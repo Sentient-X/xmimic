@@ -85,8 +85,9 @@ source data as the LAFAN 30 Hz source.
 Temporal labels are separately pinned as
 `metadata/seed_metadata_v002_temporal_labels.jsonl`, SHA256
 `302da3c319bbed4f712fa22a4d71b5288493911140cd72579e29de2ac324d634`.
-They have not yet been downloaded or joined. The full-motion language descriptions
-in the parquet are preserved. Future annotation admission must report missing and
+These bytes are included in the private source mirror; joining them to training
+examples remains separate work. The full-motion language descriptions in the
+parquet are preserved. Future annotation admission must report missing and
 unknown join keys and retain event timestamps against the source timebase.
 
 ## Access and verification
@@ -148,8 +149,11 @@ symlinks, corrupt retained bytes and incomplete inventories. Multipart ETags
 survive interruption. Restore rechecks completed local chunks and resumes at a
 verified boundary. Transient result-read failures permit two bounded
 reattachments to the same durable operation using fresh clients. A failed Catalog
-operation stops for inspection; it does not start another operation. Uploads and
-registrations are not automatically retried. Preserve the journal and receipt.
+operation stops for inspection; it does not start another operation. A multipart
+PUT retries only explicit HTTP 429/500/502/503/504 responses, at most twice, using
+a fresh grant for the same upload ID, part number and byte range. Completed parts
+are preserved. Other upload failures and registration writes stop for inspection.
+Preserve the journal and receipt.
 
 The pack is private internal source custody under the BONES-SEED license, not a
 public dataset or a new ownership claim. Derived training selections retain the

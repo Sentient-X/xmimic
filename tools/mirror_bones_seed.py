@@ -43,6 +43,14 @@ class MirrorError(ValueError):
     """Malformed transport facts or mismatched immutable bytes."""
 
 
+class MultipartTransferError(MirrorError):
+    """Only controlled HTTP metadata; never retain a response body or signed URL."""
+    def __init__(self, status, part_number):
+        self.http_status = status
+        self.part_number = part_number
+        super().__init__(f"Multipart transfer failed (HTTP {status}, part {part_number})")
+
+
 def progress(event, **facts):
     with _PRINT_LOCK:
         print(json.dumps({"event": event, "utc_epoch_seconds": int(time.time()), **facts}), flush=True)
@@ -53,6 +61,9 @@ def failure_facts(error):
     status = getattr(getattr(getattr(error, "__cause__", None), "response", None), "status_code", None)
     if type(status) is int and 100 <= status <= 599:
         facts["http_status"] = status
+    if isinstance(error, MultipartTransferError):
+        facts.update(reason="multipart_http_failure", http_status=error.http_status,
+                     part_number=error.part_number)
     return facts
 
 
@@ -295,6 +306,44 @@ class CatalogStore:
                 if attempt == 2 or self.catalog_factory is None:
                     raise
 
+    def upload_part(self, stream, upload_id, number, offset, length):
+        """Retry only explicit transient responses for identical part bytes/identity."""
+        previous = None
+        for attempt, delay in enumerate((0, 2, 5)):
+            if delay:
+                progress("multipart_retry", attempt=attempt, path=self.source_path,
+                         phase="catalog_multipart_put", **failure_facts(previous))
+                time.sleep(delay)
+            # A failed response may have consumed the entire iterator. Rewind and
+            # mint a fresh grant without changing the upload ID or part number.
+            stream.seek(offset)
+            self.phase = "catalog_part_grant"
+            grant = self.catalog.staging_upload_part(upload_id, number)
+            require(urlparse(grant.url).scheme == "https", "Non-HTTPS upload grant refused")
+            def body():
+                started = reported = time.monotonic()
+                remaining = length
+                while remaining:
+                    now = time.monotonic()
+                    require(now-started <= TRANSFER_SECONDS, "Upload transfer deadline exceeded")
+                    if now-reported >= PROGRESS_SECONDS:
+                        progress("upload", completed=length-remaining, total=length)
+                        reported = now
+                    block = stream.read(min(BLOCK, remaining))
+                    require(block, "Local upload truncated")
+                    remaining -= len(block)
+                    yield block
+            self.phase = "catalog_multipart_put"
+            response = self.transport.put(grant.url, content=body(), headers={"Content-Length": str(length)})
+            if not 200 <= response.status_code < 300:
+                previous = MultipartTransferError(response.status_code, number)
+                if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    continue
+                raise previous
+            etag = response.headers.get("etag")
+            require(isinstance(etag, str) and etag and len(etag) <= 256, "Missing multipart ETag")
+            return etag
+
     def put(self, path, sha, size, state, save):
         from sx_catalog_client import AssetUpload
         from sx_catalog_client.client import (CatalogOperation, MultipartPart, CompletedStagingUpload,
@@ -326,28 +375,10 @@ class CatalogStore:
                         length = min(upload.part_size_bytes, size-offset)
                         if str(number) in parts:
                             continue
-                        stream.seek(offset)
-                        grant = self.catalog.staging_upload_part(upload.upload_id, number)
-                        require(urlparse(grant.url).scheme == "https", "Non-HTTPS upload grant refused")
-                        def body():
-                            started = reported = time.monotonic()
-                            remaining = length
-                            while remaining:
-                                now = time.monotonic()
-                                require(now-started <= TRANSFER_SECONDS, "Upload transfer deadline exceeded")
-                                if now-reported >= PROGRESS_SECONDS:
-                                    progress("upload", completed=length-remaining, total=length)
-                                    reported = now
-                                block = stream.read(min(BLOCK, remaining))
-                                require(block, "Local upload truncated")
-                                remaining -= len(block)
-                                yield block
-                        response = self.transport.put(grant.url, content=body(), headers={"Content-Length": str(length)})
-                        require(200 <= response.status_code < 300, "Multipart transfer failed")
-                        etag = response.headers.get("etag")
-                        require(isinstance(etag, str) and etag and len(etag) <= 256, "Missing multipart ETag")
+                        etag = self.upload_part(stream, upload.upload_id, number, offset, length)
                         parts[str(number)] = etag
                         save()
+                self.phase = "catalog_staging_complete"
                 staged = self.catalog.complete_staging_upload(upload.upload_id, size_bytes=size,
                     parts=tuple(MultipartPart(int(n), tag) for n, tag in sorted(parts.items(), key=lambda p: int(p[0]))))
                 require(staged.source_uri == upload.source_uri, "Completed staging source changed")

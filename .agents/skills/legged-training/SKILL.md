@@ -104,7 +104,7 @@ principal authorized to write a private project. The pinned snapshot is 541 file
 `b1b79bbce35df8749740373218e107763e0c514b68adfd763d0d8d8d2929c220`.
 Do not put the private plan, source bytes or credentials in git.
 
-On 2026-11-07 the transport failure suite passed 31 tests with the installed SDK:
+On 2026-11-07 the transport failure suite passed 34 tests with the installed SDK:
 
 ```bash
 python -m unittest discover -s tests -p 'test_mirror_bones_seed.py' -q
@@ -129,6 +129,7 @@ not return an `is_public` field; the owning registration path defaults it to fal
 | A correctly hashed manifest restores zero files | Content hashing alone does not prove corpus completeness | Require the pinned normalized inventory, not self-declared counts |
 | Restore repeats completed archive chunks | Opening the partial file with `wb` discarded progress | Bind the journal to manifest identity, rehash retained boundaries and append |
 | Transfer stops with `CatalogUnavailableError` after acceptance | A live result read or pack-registration boundary became unavailable; the saved operation subsequently succeeded | Inspect that exact operation and API readiness; reattach reads with fresh clients, never resubmit paid work. The tool bounds read reattachment to two attempts; writes still stop for inspection |
+| Multipart upload stopped after 14 recorded parts | The old failure discarded the HTTP status, so its precise cause remains unknown | Preserve the ETags and resume the same upload. Controlled status/part diagnostics now distinguish failures; only explicit 429/500/502/503/504 responses get two fresh-grant retries for identical bytes. Permission, integrity and unknown transport failures still stop |
 
 Resume with the same output directory, project, pack and source plan. Inspect a
 failed owner operation before resuming; never blindly replace its durable
