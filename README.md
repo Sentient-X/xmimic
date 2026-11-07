@@ -2,7 +2,7 @@
 
 SentientX's legged-embodiment integration is in progress. The first changes add
 explicit robot/contact/mirror metadata, embodiment-bound retargeted motion input,
-and a complete BONES-SEED metadata inventory. See the
+and a complete BONES-SEED metadata inventory with private Catalog/R2 mirroring. See the
 [implementation and remaining prerequisites](docs/sentientx-integration.md),
 [motion contract](docs/motion-inputs.md), and [BONES-SEED inventory](docs/bones-seed.md).
 These changes do not yet provide a qualified Sentient policy, full-corpus training

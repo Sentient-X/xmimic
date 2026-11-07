@@ -1,4 +1,4 @@
-# BONES-SEED source inventory
+# BONES-SEED source custody and inventory
 
 The full source is [`bones-studio/seed`](https://huggingface.co/datasets/bones-studio/seed),
 pinned to `2f59b2077b9da34dd4e43618e705c7cb962c9a66`. The preparer inventories
@@ -104,3 +104,53 @@ python -m unittest discover -s tests -p 'test_prepare_bones_seed.py' -v
 These CPU checks cover deterministic completeness, original/mirror grouping with
 unequal frame counts, unresolved parents, duplicate identities, unsafe paths and
 explicit missing-file accounting. They do not train a policy or validate a robot.
+
+## Private R2 custody
+
+`tools/mirror_bones_seed.py` copies the complete pinned repository through the
+SentientX Catalog SDK. Its source identity is 541 files and 114,370,281,701 bytes;
+the normalized inventory digest also binds every path, size and source hash.
+This includes all three archives, all metadata, shapes, skeletons, README and
+license. It does not extract archives or admit motions to training.
+
+Use an installed `sentientx` SDK and `huggingface-hub`, an authorized Catalog
+project, an existing HF credential and the private authenticated repository-tree
+plan. Keep the plan and transport directory outside version control. The run
+uses the existing production SDK profile, or an `SX_API_KEY` supplied through
+the secret environment; credentials never belong in command arguments.
+
+```bash
+python tools/mirror_bones_seed.py mirror \
+  --project "$PROJECT_ID" --pack "$PACK_NAME" \
+  --plan /private/mirror-plan.json --output /private/bones-transfer
+
+# The receipt supplies the immutable manifest digest. No HF access is needed.
+python tools/mirror_bones_seed.py restore \
+  --project "$PROJECT_ID" --pack "$PACK_NAME" \
+  --manifest-sha256 "$MANIFEST_SHA256" --output /private/bones-seed
+
+python -m unittest discover -s tests -p 'test_mirror_bones_seed.py' -q
+```
+
+Catalog's worker scratch is smaller than the 45 GB source archives, so source
+files are stored as ordered chunks of at most 1 GiB. Catalog independently
+verifies each chunk before local transport scratch is pruned. The final private
+pack includes every chunk and a reconstruction manifest, and is published only
+after every complete source hash passes. LFS objects use SHA-256; ordinary Git
+files use Git's blob-header SHA-1. Every reconstructed file also has SHA-256.
+The manifest is read back before publication.
+
+Mirroring runs four independent files concurrently, largest first, with separate clients and at
+most one 1 GiB chunk of scratch per worker. Each file's hash remains sequential;
+manifest ordering follows the pinned plan. Failures stop new work after active
+chunks settle. Both commands retain checkpoints and reject changed identities, unsafe paths,
+symlinks, corrupt retained bytes and incomplete inventories. Multipart ETags
+survive interruption. Restore rechecks completed local chunks and resumes at a
+verified boundary. Transient result-read failures permit two bounded
+reattachments to the same durable operation using fresh clients. A failed Catalog
+operation stops for inspection; it does not start another operation. Uploads and
+registrations are not automatically retried. Preserve the journal and receipt.
+
+The pack is private internal source custody under the BONES-SEED license, not a
+public dataset or a new ownership claim. Derived training selections retain the
+source license and must separately enforce held-out membership and quality.
