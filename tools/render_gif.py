@@ -134,7 +134,12 @@ def main():
     ap.add_argument("--fade", type=int, default=6, help="frames of fade at the loop boundary")
     args = ap.parse_args()
     rec = np.load(args.rollout)
-    from xmimic.model import load_meta
+    from xmimic.model import ASSETS, load_meta
+
+    if ("robot_dir" in rec and os.path.realpath(str(rec["robot_dir"])) != str(ASSETS.resolve())) or (
+        "embodiment_id" in rec and str(rec["embodiment_id"]) != ""
+    ):
+        raise ValueError("the paper's G1 renderer cannot render a different embodiment")
 
     fq = load_meta()["free_qpos_adr"]
     left = text_panel(summarize(load_results()))

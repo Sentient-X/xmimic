@@ -1,5 +1,13 @@
 # XMimic
 
+SentientX's legged-embodiment integration is in progress. The first changes add
+explicit robot/contact/mirror metadata, embodiment-bound retargeted motion input,
+and a complete BONES-SEED metadata inventory. See the
+[implementation and remaining prerequisites](docs/sentientx-integration.md),
+[motion contract](docs/motion-inputs.md), and [BONES-SEED inventory](docs/bones-seed.md).
+These changes do not yet provide a qualified Sentient policy, full-corpus training
+or deployed SentientX job integration. The published G1 baseline below is retained.
+
 **Whole-body motion tracking for the Unitree G1, trained 3.5× faster.** XMimic is BlinkMimic's world-model trainer rebuilt
 in JAX. On four H100s it reaches BlinkMimic's target in 0.91 minutes, where BlinkMimic needs 3.19 on one; on a single
 H100 it is 1.3× faster. Same task, same hyperparameters, same evaluation.

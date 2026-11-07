@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -23,24 +24,28 @@ from xmimic import nets  # noqa: E402
 from xmimic.evaluate import load_ckpt  # noqa: E402
 from xmimic.kin import Kinematics  # noqa: E402
 from xmimic.mdp import MDP  # noqa: E402
-from xmimic.model import load_model  # noqa: E402
+from xmimic.model import ASSETS, contact_indices, load_model  # noqa: E402
 from xmimic.motion import GOAL_Q_OFFSET, load_motion  # noqa: E402
-from xmimic.rot import mat_to_quat, mv3, quat_to_mat, tr3  # noqa: E402
+from xmimic.rot import mat_to_quat, mv3, quat_to_mat  # noqa: E402
 from xmimic.sim import DECIMATION, XiLayout  # noqa: E402
 
 
-def rollout(ckpt, clip, start_s, seconds, motion_dir="data/lafan1_g1"):
+def rollout(ckpt, clip, start_s, seconds, motion_dir=None, robot_dir=None):
     """{qpos (T+1, nq), f (T+1,) reference frames, alive (T+1,)} of one episode from frame start_s * 50 of ``clip``."""
     jax.config.update("jax_platforms", "cpu")
     params, bufs, meta_ck = load_ckpt(ckpt)
     a = meta_ck["args"]
-    m, meta = load_model()
+    m, meta = load_model(robot_dir or a.get("robot_dir", ASSETS), motion_format=a.get("motion_format", "lafan1_csv"))
+    if a.get("embodiment_id") != meta.get("embodiment_id"):
+        raise ValueError("checkpoint and robot bundle have different embodiment identities")
     J = len(meta["joint_names"])
     kin = Kinematics(meta)
-    feet = [meta["tracked_bodies"].index(b) for b in ("left_ankle_roll_link", "right_ankle_roll_link")]
-    motion = load_motion(motion_dir, kin, feet)
+    feet = contact_indices(meta)
+    motion = load_motion(motion_dir or a["motion_dir"], kin, feet,
+                         motion_format=a.get("motion_format", "lafan1_csv"),
+                         joint_names=meta["joint_names"], embodiment_id=meta.get("embodiment_id"))
     layout = XiLayout(meta)
-    mdp = MDP(kin, meta["default_joint_pos"], feet, layout.dim)
+    mdp = MDP(kin, meta["default_joint_pos"], feet, layout.dim, contact_heights=meta["contact_heights"])
     ref = (GOAL_Q_OFFSET, jnp.asarray(meta["default_joint_pos"], jnp.float32), jnp.asarray(meta["action_scale"], jnp.float32))
     m.geom_friction[np.asarray(meta["robot_geom_ids"]), 0] = 1.0  # evaluation friction
     d = mujoco.MjData(m)
@@ -89,7 +94,9 @@ def rollout(ckpt, clip, start_s, seconds, motion_dir="data/lafan1_g1"):
         out["qpos"].append(d.qpos.copy())
         out["f"].append(f)
         out["alive"].append(alive)
-    return {k: np.asarray(v) for k, v in out.items()}
+    identity = {"embodiment_id": np.asarray(meta["embodiment_id"])} if "embodiment_id" in meta else {}
+    return {**{k: np.asarray(v) for k, v in out.items()}, **identity,
+            "robot_dir": np.asarray(str(Path(robot_dir or a.get("robot_dir", ASSETS)).resolve()))}
 
 
 def main():
@@ -98,10 +105,11 @@ def main():
     ap.add_argument("--clip", default="dance1_subject2")
     ap.add_argument("--start", type=float, default=60.0, help="start time in the clip (s)")
     ap.add_argument("--seconds", type=float, default=12.0)
-    ap.add_argument("--motion_dir", default="data/lafan1_g1")
+    ap.add_argument("--motion_dir", default=None, help="default: the checkpoint's motion directory")
+    ap.add_argument("--robot_dir", default=None, help="default: the checkpoint's robot bundle")
     ap.add_argument("--out", default="rollout.npz")
     args = ap.parse_args()
-    r = rollout(args.ckpt, args.clip, args.start, args.seconds, args.motion_dir)
+    r = rollout(args.ckpt, args.clip, args.start, args.seconds, args.motion_dir, args.robot_dir)
     np.savez(args.out, **r, clip=args.clip)
     print(f"{args.clip} from {args.start:.1f} s: {len(r['f']) - 1} steps, alive to the end: {bool(r['alive'][-1])} -> {args.out}")
 

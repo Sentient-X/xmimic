@@ -57,7 +57,7 @@ def build(cls, cfg: Config, clips=CLIPS):
     xm.kin = Kinematics(meta)
     feet = [meta["tracked_bodies"].index(b) for b in ("left_ankle_roll_link", "right_ankle_roll_link")]
     xm.layout = XiLayout(meta)
-    xm.mdp = MDP(xm.kin, meta["default_joint_pos"], feet, xm.layout.dim)
+    xm.mdp = MDP(xm.kin, meta["default_joint_pos"], feet, xm.layout.dim, contact_heights=meta["contact_heights"])
     xm.motion = motion_for(xm.kin, feet, clips)
     xm.goal_dim = xm.motion.goal_dim(c.goal_frames)
     xm.obs_dim = obs_dim(J)
@@ -65,7 +65,7 @@ def build(cls, cfg: Config, clips=CLIPS):
     xm.wm_in = inv_dim(J) + J + xm.layout.dim
     xm.wm_out = 12 + 2 * J
     xm.ref = (GOAL_Q_OFFSET, np.asarray(meta["default_joint_pos"], np.float32), np.asarray(meta["action_scale"], np.float32))
-    xm.mirror = Mirror(meta["joint_names"], xm.layout)
+    xm.mirror = Mirror(meta["mirror_permutation"], meta["mirror_signs"], xm.layout)
     xm.err_floor = np.concatenate([np.full((n,), v, np.float32) for n, v in ERR_FLOOR_PARTS]
                                   + [np.full((J,), 3e-3, np.float32), np.full((J,), 5e-2, np.float32)])  # fmt: skip
     xm.n_mirror = int(c.wm_batch * c.wm_mirror)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from pathlib import Path
 
 LAYOUTS = ("1GPU", "FP1", "FP", "AL", "ALP", "AWL", "AWLP")
 GPUS_PER_LAYOUT = {"1GPU": 1, "FP1": 1, "FP": 2, "AL": 2, "ALP": 3, "AWL": 3, "AWLP": 4}
@@ -64,6 +65,8 @@ class Config:
     ckpt_every: int = 100
     seed: int = 0
     motion_dir: str = "data/lafan1_g1"
+    motion_format: str = "lafan1_csv"
+    robot_dir: str = str(Path(__file__).resolve().parents[1] / "assets" / "g1")
     log_dir: str = "runs/xmimic"
     max_minutes: float = 0.0  # stop after this much training time (0: run all iterations)
     # ---- layout and learner
@@ -90,4 +93,8 @@ def parse_args(argv=None) -> Config:
     assert cfg.layout in LAYOUTS, f"--layout must be one of {LAYOUTS}"
     assert cfg.learner in ("fast", "reference"), "--learner must be fast or reference"
     assert cfg.imag_remat in ("none", "dots", "full"), "--imag_remat must be none, dots or full"
+    if cfg.motion_format not in ("lafan1_csv", "retargeted_npz"):
+        p.error("--motion_format must be lafan1_csv or retargeted_npz")
+    if not 0 <= cfg.wm_mirror <= 1:
+        p.error("--wm_mirror must be between 0 and 1")
     return cfg

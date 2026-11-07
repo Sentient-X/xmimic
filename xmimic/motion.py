@@ -1,6 +1,7 @@
 """Reference motion library (a port of blinkmimic/motion.py).
 
-The G1-retargeted LAFAN1 clips (30 fps CSV) are resampled to the 50 Hz control rate. Root and joint velocities come from
+G1-retargeted LAFAN1 clips (30 fps CSV), or named retargeted NPZ clips with their own timebase, are resampled to the
+50 Hz control rate. Root and joint velocities come from
 finite differences, the tracked bodies from forward kinematics. Clips are cut into 1-second reset bins, and the policy's
 goal is a window of future reference frames. The library is a pytree of device arrays: it is passed into jitted functions
 as an argument and never closed over as a constant.
@@ -12,6 +13,7 @@ import dataclasses
 import glob
 import os
 from functools import partial
+from typing import Literal, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -22,13 +24,73 @@ from .rot import mat_to_6d, mm3, mv3, tr3, yaw_mat
 CONTROL_DT = 0.02
 BIN_FRAMES = 50
 GOAL_Q_OFFSET = 15  # index of q(f+1) in the goal vector (first future frame: dp 3, rot 6, v 3, w 3, then q)
+MotionFormat = Literal["lafan1_csv", "retargeted_npz"]
+
+
+def _motion_arrays(path, p, quat, q, fps, num_joints):
+    """Parse the numeric motion boundary before resampling or placing arrays on a device."""
+    arrays = tuple(np.asarray(x) for x in (p, quat, q, fps))
+    if any(x.dtype.kind not in "iuf" or not np.isfinite(x).all() for x in arrays):
+        raise ValueError(f"{path}: motion values must be finite real numbers")
+    p, quat, q, rate = arrays
+    if rate.shape != () or float(rate) <= 0:
+        raise ValueError(f"{path}: fps must be a positive scalar")
+    fps = float(rate)
+    if p.ndim != 2 or p.shape[1] != 3 or p.shape[0] < 2:
+        raise ValueError(f"{path}: root_p must have shape (T, 3), with T >= 2")
+    if quat.shape != (len(p), 4) or q.shape != (len(p), num_joints):
+        raise ValueError(f"{path}: root_quat and q must have shapes (T, 4) and (T, {num_joints})")
+    if (len(p) - 1) / fps < CONTROL_DT:
+        raise ValueError(f"{path}: clip needs at least two frames at the 50 Hz control rate")
+    norm = np.linalg.norm(quat.astype(np.float64), axis=-1)
+    if not np.allclose(norm, 1.0, rtol=0, atol=1e-3):
+        raise ValueError(f"{path}: root_quat must contain unit quaternions")
+    with np.errstate(over="ignore"):
+        numeric = tuple(x.astype(np.float32) for x in (p, quat, q))
+    if any(not np.isfinite(x).all() for x in numeric):
+        raise ValueError(f"{path}: motion values overflow float32")
+    return (*numeric, fps)
 
 
 def load_lafan1_csv(path: str):
     """30 fps rows of root position, root quaternion (xyzw) and 29 joint angles -> (p, quat wxyz, q, fps)."""
-    raw = np.loadtxt(path, delimiter=",")
+    raw = np.loadtxt(path, delimiter=",", ndmin=2)
+    if raw.shape[1] != 36:
+        raise ValueError(f"{path}: LAFAN1 G1 CSV must have exactly 36 columns")
     p, q_xyzw, j = raw[:, :3], raw[:, 3:7], raw[:, 7:36]
-    return p, np.concatenate((q_xyzw[:, 3:4], q_xyzw[:, :3]), -1), j, 30.0
+    return _motion_arrays(path, p, np.concatenate((q_xyzw[:, 3:4], q_xyzw[:, :3]), -1), j, 30.0, 29)
+
+
+def load_retargeted_npz(path: str, joint_names: Sequence[str], embodiment_id: str):
+    """Read already-retargeted metres/radians/wxyz motion, bound to one embodiment revision.
+
+    This is not a BONES-SEED source parser. Human skeletons and G1 trajectories must first
+    pass through retargeting for the requested embodiment. No object arrays are unpickled.
+    """
+    expected = tuple(joint_names)
+    if not expected or len(set(expected)) != len(expected) or any(not isinstance(n, str) or not n for n in expected):
+        raise ValueError("expected joint_names must be nonempty and unique")
+    if not isinstance(embodiment_id, str) or not embodiment_id:
+        raise ValueError("retargeted_npz requires an expected embodiment_id")
+    with np.load(path, allow_pickle=False) as data:
+        required = {"root_p", "root_quat", "q", "fps", "joint_names", "embodiment_id"}
+        missing = required - set(data.files)
+        if missing:
+            raise ValueError(f"{path}: missing motion fields {sorted(missing)}")
+        identity = data["embodiment_id"]
+        if identity.shape != () or identity.dtype.kind != "U" or str(identity) != embodiment_id:
+            raise ValueError(f"{path}: embodiment_id does not match the requested revision")
+        names = data["joint_names"]
+        if names.ndim != 1 or names.dtype.kind != "U":
+            raise ValueError(f"{path}: joint_names must be a Unicode string vector")
+        names = tuple(names.tolist())
+        if len(set(names)) != len(names) or set(names) != set(expected):
+            raise ValueError(f"{path}: joint_names must name each requested joint exactly once")
+        p, quat, q, fps = _motion_arrays(
+            path, data["root_p"], data["root_quat"], data["q"], data["fps"], len(names)
+        )
+    quat = quat / np.linalg.norm(quat, axis=-1, keepdims=True)
+    return p, quat, q[:, [names.index(name) for name in expected]], fps
 
 
 def _slerp_np(q0, q1, t):
@@ -140,14 +202,36 @@ class Motion:
         return self.root_p[f], self.root_R[f], self.root_v[f], self.root_w[f], self.q[f], self.qd[f]
 
 
-def load_motion(motion_dir: str, kin, feet: list[int], margin: float = 0.015, vmax: float = 0.5, quant: float = 0.05) -> Motion:
-    """All *.csv clips of ``motion_dir`` in sorted order (blinkmimic.motion.MotionLib.from_dir plus set_ref_contact(feet))."""
-    files = sorted(glob.glob(os.path.join(motion_dir, "*.csv")))
-    assert files, f"no clips in {motion_dir}: run tools/download_data.sh first"
+def load_motion(motion_dir: str, kin, feet: list[int], margin: float = 0.015, vmax: float = 0.5, quant: float = 0.05,
+                *, motion_format: MotionFormat = "lafan1_csv", joint_names: Sequence[str] | None = None,
+                embodiment_id: str | None = None) -> Motion:
+    """Load sorted clips of one explicit representation; all resampled frames remain device-resident.
+
+    The LAFAN1 mode is the original G1 baseline. Retargeted NPZ input requires the target's
+    exact revision and native joint names; filenames and joint counts never infer identity.
+    """
+    if motion_format not in ("lafan1_csv", "retargeted_npz"):
+        raise ValueError(f"unsupported motion_format: {motion_format!r}")
+    if motion_format == "retargeted_npz" and (joint_names is None or embodiment_id is None):
+        raise ValueError("retargeted_npz requires joint_names and embodiment_id")
+    if motion_format == "lafan1_csv" and (len(kin.q_lo) != 29 or (joint_names is not None and len(joint_names) != 29)):
+        raise ValueError("lafan1_csv is the 29-joint G1 baseline; retarget for this embodiment first")
+    extension = "csv" if motion_format == "lafan1_csv" else "npz"
+    other = "npz" if extension == "csv" else "csv"
+    if glob.glob(os.path.join(motion_dir, f"*.{other}")):
+        raise ValueError(f"{motion_dir}: mixed motion formats; use a directory for one representation")
+    files = sorted(glob.glob(os.path.join(motion_dir, f"*.{extension}")))
+    if not files:
+        raise ValueError(f"no {motion_format} clips in {motion_dir}")
     names = tuple(os.path.splitext(os.path.basename(f))[0] for f in files)
     ps, Rs, vs, ws, js, jds, lens = [], [], [], [], [], [], []
     for f in files:
-        p, quat, j, fps = load_lafan1_csv(f)
+        if motion_format == "lafan1_csv":
+            p, quat, j, fps = load_lafan1_csv(f)
+        else:
+            p, quat, j, fps = load_retargeted_npz(f, joint_names, embodiment_id)
+        if j.shape[1] != len(kin.q_lo):
+            raise ValueError(f"{f}: joint count does not match the target kinematics")
         p, quat, j = (x.astype(np.float32) for x in (p, quat, j))
         T_src = p.shape[0]
         dur = (T_src - 1) / fps
@@ -188,8 +272,8 @@ def load_motion(motion_dir: str, kin, feet: list[int], margin: float = 0.015, vm
     z = np.asarray(body_p[:, feet, 2])
     vh = np.linalg.norm(np.asarray(body_v[:, feet, :2]), axis=-1)
     floor = np.zeros_like(z)
-    for c in range(len(lens)):
-        s = clip_id == c
+    for start, end in zip(clip_start, clip_end):
+        s = slice(int(start), int(end) + 1)
         floor[s] = np.quantile(z[s], quant, axis=0)
     ref_contact = ((z < floor + margin) & (vh < vmax)).astype(np.float32)
     return Motion(root_p=root_p, root_R=root_R, root_v=root_v, root_w=root_w, q=q, qd=qd, body_p=body_p, body_R=body_R,

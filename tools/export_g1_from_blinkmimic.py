@@ -86,6 +86,11 @@ ground_geoms = [g for g in range(model.ngeom) if model.geom_type[g] == mujoco.mj
 blink_ground = [g for g in range(model.ngeom) if model.geom_bodyid[g] == 0]
 meta = {
     "joint_names": joint_names,
+    "contact_bodies": ["left_ankle_roll_link", "right_ankle_roll_link"],
+    "contact_heights": [0.045, 0.045],
+    # This mapping belongs to this G1 export, never to a generic joint-name heuristic.
+    "mirror_permutation": [joint_names.index(n.replace("left_", "@").replace("right_", "left_").replace("@", "right_")) for n in joint_names],
+    "mirror_signs": [-1 if any(f"_{t}_" in n for t in ("roll", "yaw")) else 1 for n in joint_names],
     "qpos_adr": [int(model.jnt_qposadr[jid[n]]) for n in joint_names],
     "dof_adr": [int(model.jnt_dofadr[jid[n]]) for n in joint_names],
     "actuator_of_joint": [int(act_of_joint[n]) for n in joint_names],
