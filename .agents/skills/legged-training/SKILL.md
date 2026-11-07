@@ -261,3 +261,22 @@ the published artifactclosure. Mid-copy/mid-tar/mid-JSON failure tests refusepar
 admission and succeed onretry. The image provenance now reads the superproject's
 mode160000 gitlink; `git rev-parse` inside an archive-filled submodule reports the
 parent HEAD and is not embodiment evidence.
+
+
+Final CPU suite:178 tests and44subtests passed in10.82seconds with
+`JAX_PLATFORMS=cpu python -m pytest tests --ignore=tests/test_fast_equiv.py -q`.
+The excluded upstream equivalence module is its own CLI harness requiring LAFAN/G1
+motiondata and an explicitly constructed Env; it is not a pytestfixture suite and was
+not exercised here. The independent correction pass passed20checks and retained no
+finding. Hosted eviction/GPU restoration is still unverified.
+
+Actual privateCatalog/R2 cache publication and complete sample readback succeeded for
+the rejected599-frame retarget. ManifestSHA256:
+`3553e5598010ed4074623edbe87a45d39057509fbac0956dc0b9b272f9c79df6`.
+Pack: `xmimic.retarget.29a32a1dc5216ae845afb8cd516b1e5ac1b2d835c232912fbfcbb32f6c67401b`.
+The three members (cachemanifest, candidatecoordinates and full residualprovenance)
+were registered through Catalog, linked to the mirrored sourcepack, downloaded anew,
+and verified. `training_admitted=false` remains intact. Private readback and operation
+receipt are under `data/bones_seed/retarget-cache-readback` and
+`data/bones_seed/retarget-cache-publication.json`. This proves retained cachecustody,
+not successful retarget admission or a trained model.

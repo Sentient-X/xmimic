@@ -70,3 +70,11 @@ privately to R2; downloading it again from Hugging Face is unnecessary.
 The owning platform changes and [runtime image recipes](runtime-images.md) require
 publication before this command can execute remotely. Local tests do not establish
 a deployed Modal run, a trained Sentient policy or physical acceptance.
+
+
+Local acceptance on 2026-11-08:178 CPU tests and44subtests passed. Independent review
+found and corrected output-directory and interrupted-materialization bugs; its20-check
+correction pass retained no finding. A real rejected599-frame retarget cache was
+published privately to Catalog/R2, linked to its mirrored source, and downloaded with
+all member digests verified. It remains excluded from training. Two complete source
+clips have been tested; neither passed the current Sentient geometric profile.
