@@ -14,9 +14,10 @@ from dataclasses import asdict, dataclass
 
 import mujoco
 
-from sx_embodiments import Embodiment, development_embodiments, embodiments, materialized
+from sx_embodiments import Embodiment, EmbodimentName, development_embodiments, materialized
 from sx_embodiments.assets import AssetFormat
 from sx_embodiments.layout import Bounds
+from sx_embodiments.successor import current
 
 
 @dataclass(frozen=True)
@@ -90,14 +91,25 @@ def simulation_audits(body: Embodiment) -> tuple[SimulationAudit, ...]:
 
 
 def main() -> None:
-    full = embodiments["sentient-humanoid"]
+    # Corrected assemblies with provisional mass/mount evidence are development bodies.
+    # Resolve either registry without implying that registry membership is qualification.
+    full = current(EmbodimentName("sentient-humanoid"))
     upper = development_embodiments["sentient-static-upper-body"]
     full_axes = {c.joint_name: c.axis for c in full.state.coordinates}
     upper_axes = {c.joint_name: c.axis for c in upper.state.coordinates}
+    full_parts = {c.instance: c.part for c in full.components}
+    upper_parts = {c.instance: c.part for c in upper.components}
+    shared_instances = full_parts.keys() & upper_parts.keys()
     print(json.dumps({
         "scope": "source audit only; does not establish training or hardware readiness",
         "full": asdict(body_audit(full)),
         "corrected_upper": asdict(body_audit(upper)),
+        "shared_components_with_equal_part_facts": sorted(
+            str(name) for name in shared_instances if full_parts[name] == upper_parts[name]
+        ),
+        "shared_components_with_different_part_facts": sorted(
+            str(name) for name in shared_instances if full_parts[name] != upper_parts[name]
+        ),
         "shared_names_with_different_axis_facts": sorted(
             name for name in full_axes.keys() & upper_axes.keys()
             if full_axes[name] != upper_axes[name]

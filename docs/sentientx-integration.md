@@ -83,11 +83,32 @@ even to interpret an old running body. Historical reports must remain readable
 without approving new positional commands, or the rollout must explicitly migrate
 assignments. Retaining old documents alone does not fix that live consumer.
 
-The remaining source gap is the corrected upper-body attachment to the full
-pelvis/waist and whether both waist coordinates remain. The corrected source
-contains no legs and uses different chest/base frames. The old full-body MJCF
-has zero actuators, a misspelled hip joint and limits inconsistent with the
-canonical body. It must not be reused as a training model merely because it loads.
+The owner confirmed there is no newer full-body CAD to wait for. Carry shared
+upper-body corrections into the existing full-body assembly: retain its pelvis,
+waist roll/pitch, chest and legs, and mate the corrected arm/gripper modules at
+its existing shoulder seats. Keep the static body's table clamp, torso drive and
+unit calibration out of that transfer. Shared modules own the reusable geometry,
+joint limits and drive facts so subsequent corrections propagate to both bodies.
+
+The two descriptions use different chest frames and shoulder widths. A nominal
+head placement can be derived by aligning their shoulder centers while preserving
+their declared forward/up axes. This is an explicit design choice, not a measured
+mount or a claim that the chest shapes coincide. Retaining the old shoulder seats
+leaves a roughly 7.369 mm narrower span than the static body. Record this difference
+and test the transform rather than silently treating the chest frames as equal.
+The corrected full body remains a development assembly pending mounting, collision
+and dynamics qualification. Missing new CAD does not prevent composing or testing it.
+The source audit of this candidate reports 39 coordinates, seven joints per arm,
+and identical part facts for both arms, both grippers, the neck, both head cameras
+and the head IMU. Only the torso differs among shared component names, deliberately:
+the full body retains its waist chain and original torso drive. The shared arms'
+part-local ready references are not an accepted standing or whole-body Ready pose.
+
+The old full-body MJCF has zero actuators, a misspelled hip joint and limits
+inconsistent with the canonical body. Preserve it for historical provenance;
+it must not describe the corrected assembly or become its training model merely
+because it loads. The candidate has no active MJCF; a new simulation projection is
+still required.
 
 Reproduce the source audit in an environment containing the owning packages:
 
@@ -100,9 +121,11 @@ does not open hardware or return a training-readiness receipt.
 
 ## Required next implementation
 
-1. Complete the shared full-body assembly from a sourced mount/waist definition.
-   Prove shared component facts and FK; preserve historical identities and
-   coordinate order. Generate simulation assets through the owning layer.
+1. Verify the composed full-body candidate against its source parts and explicitly
+   derived mounting assumptions. Prove shared component facts, unchanged lower-body
+   FK and motion of the corrected upper parts with the waist; preserve historical
+   identities and coordinate order. Generate simulation assets through the owning
+   layer, then qualify contacts, collisions, masses and drive parameters.
 2. Import pinned BONES-SEED source archives and temporal labels into governed
    storage. For each original and mirror, retain source digests, annotations,
    timebase, actor/take/group, license and an explicit disposition. Retarget SOMA
@@ -147,3 +170,10 @@ reward equivalence for unequal contact heights. The companion embodiment candida
 passed 53 focused composition/history/generated-output tests; an independent
 refutation corrected stale successor expectations. Neither result is a traversal
 through a deployed platform or evidence of physical acceptance.
+
+Following the owner's clarification that no newer full-body CAD exists, the
+corrected full-body candidate passed 262 focused owning-package tests. The actual
+audit resolves development body
+`a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3`.
+The companion remains draft and unpinned; it was tested against the checkout's
+embodiment baseline, not a reconciled newer `main` or deployed station.
