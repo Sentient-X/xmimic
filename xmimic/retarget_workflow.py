@@ -6,6 +6,7 @@ does not choose a robot by tensor width, and never substitutes a failed retarget
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -20,7 +21,7 @@ from sx_geometry import mat_to_quat
 from .artifact_cache import ArtifactCache, CacheIdentity, ClipDisposition, content_hash
 from .retarget_source import CONVERTER_VERSION, parse_soma_bvh
 from .retarget_target import IKConfig, TargetProfile, prepare_target, solve_sequence
-from . import retarget_source, retarget_target
+from . import retarget_source, retarget_target, retarget_progress
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,10 @@ class RetargetReceipt:
 
 def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embodiment_id: str,
                   cache: ArtifactCache, clip_id: str, source_group: str,
-                  execution_ref: str, shape_sha256: str | None = None) -> RetargetReceipt:
+                  execution_ref: str, shape_sha256: str | None = None,
+                  stop_requested: Callable[[], bool] = lambda: False,
+                  on_progress: Callable[[int, int], None] | None = None,
+                  on_checkpoint: Callable[[dict], None] | None = None) -> RetargetReceipt:
     """Account for every source frame; only a fully feasible clip gets motion.npz.
 
     A rejected clip still retains its candidate coordinates and residuals. Neither
@@ -146,6 +150,7 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         "source": hashlib.sha256(Path(retarget_source.__file__).read_bytes()).hexdigest(),
         "target": hashlib.sha256(Path(retarget_target.__file__).read_bytes()).hexdigest(),
         "workflow": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "progress": hashlib.sha256(Path(retarget_progress.__file__).read_bytes()).hexdigest(),
         "numpy": np.__version__, "converter": CONVERTER_VERSION,
     })
     identity = CacheIdentity(source_sha, source_shape, str(body.id), target.binding.urdf_sha256,
@@ -153,7 +158,7 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
                              content_hash({"recipe": asdict(recipe), "source_group": source_group, "clip_id": clip_id}))
     with cache.entry(identity, [clip_id]) as entry:
         state = entry.document["clips"][clip_id]
-        if entry.document["complete"]:
+        if entry.document["complete"] or state["status"] in {"succeeded", "rejected", "failed"}:
             return RetargetReceipt(identity.key, entry.complete(), ClipDisposition(state["status"]), True, entry.path)
         # Parsing/validation occurs before recording paid solver work as started.
         clip = parse_soma_bvh(source, world_from_source=recipe.world_from_source)
@@ -181,10 +186,21 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
                         for name, offset in recipe.orientation_offsets}
         if not all(np.isfinite(a).all() for a in (root_p, root_R, *positions.values(), *orientations.values())):
             raise ValueError("Recipe scales overflowed source geometry")
-        entry.start_clip(clip_id, execution_ref)
+        journal = entry.frame_progress(clip_id, execution_ref, total_frames=clip.frame_count,
+                                       joint_count=len(target.binding.joint_names),
+                                       landmark_count=len(target.binding.profile.landmarks))
+        if on_checkpoint is not None:
+            on_checkpoint(journal.checkpoint_receipt())
+        def committed(frame):
+            journal.append(frame)
+            if on_checkpoint is not None:
+                on_checkpoint(journal.checkpoint_receipt())
+            if on_progress is not None:
+                on_progress(frame.index + 1, clip.frame_count)
         sequence = solve_sequence(target, positions, root_p=root_p, root_quat=root_q,
                                   fps=clip.fps, initial_q=[initial[n] for n in target.binding.joint_names],
-                                  orientations=orientations, config=recipe.solver)
+                                  orientations=orientations, config=recipe.solver,
+                                  resume=journal.frames, on_frame=committed, stop_requested=stop_requested)
         disposition = ClipDisposition.SUCCEEDED if sequence.feasible else ClipDisposition.REJECTED
         provenance = {"source_sha256": source_sha, "source_group": source_group,
                       "shape_sha256": source_shape, "frame_time_literal": clip.frame_time_literal,

@@ -5,7 +5,7 @@ infer a human/robot root correspondence, balance, collisions, drives or dynamics
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 import hashlib
@@ -176,7 +176,8 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
                  f"{name}: URDF bounds missing")
         _require(np.allclose([float(limit.attrib['lower']), float(limit.attrib['upper'])], [lo, hi], rtol=0, atol=1e-9),
                  f"{name}: native and URDF bounds disagree")
-        lower.append(lo); upper.append(hi)
+        lower.append(lo)
+        upper.append(hi)
     for name, value in passive.items():
         limit = joints[name].find("limit")
         _require(limit is not None and "lower" in limit.attrib and "upper" in limit.attrib,
@@ -281,9 +282,30 @@ def _rotations(value, shape):
     return array
 
 
+@dataclass(frozen=True)
+class RetargetFrame:
+    """One complete solver boundary, including rejected diagnostics and next warm start."""
+    index: int
+    q: np.ndarray
+    position_residual_m: np.ndarray
+    orientation_residual_rad: np.ndarray
+    iterations: int
+    disposition: Disposition
+
+
+class RetargetInterrupted(RuntimeError):
+    """Stopped between frames; the last acknowledged frame is durably retained."""
+
+    def __init__(self, completed: int, total: int):
+        self.completed, self.total = completed, total
+        super().__init__(f"Retarget stopped after {completed}/{total} committed frames")
+
+
 def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], *, root_p,
                    root_quat, fps: float, initial_q, orientations: Mapping[str, np.ndarray] | None = None,
-                   config: IKConfig = IKConfig()) -> RetargetSequence:
+                   config: IKConfig = IKConfig(), resume: tuple[RetargetFrame, ...] = (),
+                   on_frame: Callable[[RetargetFrame], None] | None = None,
+                   stop_requested: Callable[[], bool] = lambda: False) -> RetargetSequence:
     """Bounded multi-landmark IK, warm-started across every frame, on the CPU.
 
     An explicit root trajectory can translate and rotate freely in 3D. It is not
@@ -320,7 +342,34 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
         _require(seed[b.joint_names.index(name)] == value, "Initial state disagrees with explicit hold")
     free = np.asarray(target.free_indices, dtype=int)
     q_out, p_out, r_out, dispositions, iterations = [], [], [], [], []
-    for frame in range(T):
+    _require(len(resume) <= T, "Retained prefix exceeds source sequence")
+    for index, saved in enumerate(resume):
+        _require(saved.index == index and saved.q.shape == lo.shape
+                 and np.isfinite(saved.q).all() and np.all(saved.q >= lo) and np.all(saved.q <= hi),
+                 "Retained frame coordinates or order differ")
+        _require(saved.position_residual_m.shape == (len(b.profile.landmarks),)
+                 and saved.orientation_residual_rad.shape == (len(b.profile.landmarks),)
+                 and np.isfinite(saved.position_residual_m).all()
+                 and np.isfinite(saved.orientation_residual_rad).all()
+                 and np.all(saved.position_residual_m >= 0) and np.all(saved.orientation_residual_rad >= 0)
+                 and type(saved.iterations) is int and 0 <= saved.iterations <= config.max_iterations,
+                 "Retained frame diagnostics differ")
+        for name, value in b.profile.holds:
+            _require(saved.q[b.joint_names.index(name)] == value, "Retained frame changed held coordinates")
+        ok = (np.all(saved.position_residual_m <= config.position_tolerance_m)
+              and np.all(saved.orientation_residual_rad <= config.orientation_tolerance_rad))
+        _require(saved.disposition is (Disposition.GEOMETRICALLY_FEASIBLE if ok else Disposition.RESIDUAL_EXCEEDED),
+                 "Retained disposition differs from residuals")
+        q_out.append(saved.q.copy())
+        p_out.append(saved.position_residual_m.copy())
+        r_out.append(saved.orientation_residual_rad.copy())
+        iterations.append(saved.iterations)
+        dispositions.append(saved.disposition)
+    if resume:
+        seed = resume[-1].q.copy()
+    for frame in range(len(resume), T):
+        if stop_requested():
+            raise RetargetInterrupted(frame, T)
         def residual(q):
             rows, pe, re = [], [], []
             actual = target.poses(q, root_p[frame], root_quat[frame])
@@ -373,7 +422,12 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
         _, pe, re = residual(q)  # Measure returned state, never a stale pre-update error.
         ok = np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad)
         dispositions.append(Disposition.GEOMETRICALLY_FEASIBLE if ok else Disposition.RESIDUAL_EXCEEDED)
-        q_out.append(q.copy()); p_out.append(pe); r_out.append(re); iterations.append(used)
+        q_out.append(q.copy())
+        p_out.append(pe)
+        r_out.append(re)
+        iterations.append(used)
+        if on_frame is not None:
+            on_frame(RetargetFrame(frame, _readonly(q), _readonly(pe), _readonly(re), used, dispositions[-1]))
         seed = q
     return RetargetSequence(b, config, _readonly(root_p), _readonly(root_quat), _readonly(q_out), float(fps),
                             _readonly(p_out), _readonly(r_out), tuple(iterations), tuple(dispositions))

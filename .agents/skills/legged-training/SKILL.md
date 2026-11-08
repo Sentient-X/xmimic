@@ -280,3 +280,32 @@ and verified. `training_admitted=false` remains intact. Private readback and ope
 receipt are under `data/bones_seed/retarget-cache-readback` and
 `data/bones_seed/retarget-cache-publication.json`. This proves retained cachecustody,
 not successful retarget admission or a trained model.
+
+
+### CPU retarget frame recovery (2026-11-08)
+
+Use the exact owner runtime/embodiment checkout first on `PYTHONPATH`, without
+syncing the shared venv. The bounded acceptance command was:
+
+```bash
+PYTHONPATH=".:$OWNER/packages/sx-embodiments:$OWNER/packages/sx-training:$OWNER/packages/sx-protocol/generated/python" \
+python -m pytest tests/test_retarget_progress.py tests/test_managed_worker.py \
+  tests/test_retarget_workflow.py tests/test_retarget_target.py tests/test_artifact_cache.py -q
+```
+
+Observed: 72 passed in 3.89 seconds. Real subprocesses exited after the third fsynced
+frame of both a feasible and a rejected clip. Resume forbade solver evaluation of the
+three committed frames and matched uninterrupted coordinates and diagnostics exactly.
+The actual `sx_training.execute` path also stopped, checkpointed and resumed; missing
+acknowledged frames refused recovery, and native progress ahead of the envelope survived.
+
+| Failure | Cause | Fix |
+|---|---|---|
+| An interrupted whole-clip job retained only running status | No frame boundary was durable | Fsync a hash-chained frame journal before advancing; resume the exact warm start |
+| Rejected frames disappeared from progress | Only successful outputs were treated as useful | Retain each frame's coordinates, residuals, iterations and disposition |
+| Replacement could silently roll back beyond the managed checkpoint | Receipt and native cache were not compared | Bind receipt to the prefix digest and refuse missing acknowledged native state |
+
+Preconditions: same admitted source/body/recipe/code, same execution reference, and the
+same retained run volume. Stop on a changed binding, corrupt chain, missing acknowledged
+frame or legacy running state without a journal. A kill inside a frame can repeat only
+that uncommitted frame. These tests do not establish hosted Modal commit visibility.

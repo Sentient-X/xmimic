@@ -169,8 +169,6 @@ def retarget(context) -> Path:
     expected = {'embodiment_id', 'clip_id', 'source_group', 'shape_sha256'}
     if set(context.config) != expected:
         raise ValueError('CPU program needs exact embodiment, clip, family and shape bindings')
-    if context.recovery_pending:
-        raise ValueError('CPU cache recovery uses retained cache state, not a training checkpoint')
     artifacts = context.artifacts
     inherited = context.artifact_manifest.training_eligible
     if context.artifact_manifest.purpose is not ArtifactPurpose.TRANSFORM:
@@ -184,6 +182,22 @@ def retarget(context) -> Path:
     staging = work / 'materializing'
     output = context.run_dir / 'artifact'
     robot = output / 'robot'
+    from .retarget_progress import verify_progress_checkpoint
+    from .retarget_target import RetargetInterrupted
+    cache = ArtifactCache(work / 'retarget-cache')
+    def restore_progress(path):
+        verify_progress_checkpoint(cache, _json(path.read_bytes()), clip_id=context.config['clip_id'],
+                                   execution_ref=context.job_id)
+    context.restore(restore_progress)
+    context.recovery_complete()
+    latest_progress = []
+    def save_progress(receipt, *, force=False):
+        latest_progress[:] = [receipt]
+        completed = receipt['completed']
+        if force or completed % 32 == 0 or completed == receipt['total_frames'] or context.stopping:
+            path = work / 'progress-receipts' / f'frame-{completed:09d}.json'
+            _write(path, receipt, staging=staging)
+            context.checkpoint(path, step=completed)
     _copy_prefix(artifacts, 'robot', robot, staging=staging)
     with _body(artifacts, work / 'owner-assets', staging=staging) as body:
         if str(body.id) != context.config['embodiment_id']:
@@ -201,10 +215,17 @@ def retarget(context) -> Path:
                     or meta['owner_receipt_sha256'] != _digest(robot/'receipt.json')
                     or meta['owner_receipt'] != receipt):
                 raise ValueError('Retained simulation training profile differs')
-        result = retarget_clip(body, _read(artifacts, 'source.bvh', ParseLimits().max_bytes), recipe,
-                               expected_embodiment_id=str(body.id), cache=ArtifactCache(work / 'retarget-cache'),
-                               clip_id=context.config['clip_id'], source_group=context.config['source_group'],
-                               execution_ref=context.job_id, shape_sha256=context.config['shape_sha256'])
+        try:
+            result = retarget_clip(body, _read(artifacts, 'source.bvh', ParseLimits().max_bytes), recipe,
+                                   expected_embodiment_id=str(body.id), cache=cache,
+                                   clip_id=context.config['clip_id'], source_group=context.config['source_group'],
+                                   execution_ref=context.job_id, shape_sha256=context.config['shape_sha256'],
+                                   stop_requested=lambda: context.stopping, on_checkpoint=save_progress)
+        except RetargetInterrupted:
+            if latest_progress:
+                save_progress(latest_progress[-1], force=True)
+            context.interrupted()
+            raise
     document = _json((result.directory / 'manifest.json').read_bytes())
     clip = document['clips'][context.config['clip_id']]
     for name, reference in clip['artifacts'].items():

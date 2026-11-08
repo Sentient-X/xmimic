@@ -40,9 +40,21 @@ all clips succeeded or that the dataset is eligible for training. Training selec
 must inspect the dispositions and its own quality/held-out policy.
 
 An interruption after `start_clip` leaves the original execution reference running.
-Only that reference may settle the clip. There is no automatic retry or failed-clip
-reset. Reconcile the original local process or managed operation first. A missing
-state file inside an existing cache directory is also ambiguous and is refused.
+Only that reference may settle the clip. `retarget_clip` creates a bound frame journal
+before the solver starts, so the same execution can resume its committed prefix under
+the cache lock. The last frame's exact coordinates warm-start the next frame; rejected
+frames retain their diagnostics and count as committed progress too. Each complete
+frame is fsynced before the next frame begins. A kill during an unfinished frame may
+repeat that uncommitted frame, but acknowledged frames are never solved again.
+
+Legacy running entries without a frame journal still require reconciliation; there is
+no failed-clip reset. Missing or corrupt state is refused rather than recreated. The
+managed CPU worker checkpoints a journal receipt every 32 frames, at completion and
+on cooperative stop. On replacement it verifies the acknowledged prefix against the
+same retained run-volume journal. Native progress may be ahead of that receipt, never
+behind it. The receipt is not a replacement for missing coordinates. Local process-kill
+and managed-runtime tests establish this behavior; Modal volume visibility across
+actual hosted eviction requires separate execution evidence.
 An interrupted file copy can leave an unreferenced blob; it never becomes a success.
 A crash between committing the completed manifest and state can finish the same
 manifest on reopening. Do not remove cache state to force a paid job to start again.
@@ -116,7 +128,7 @@ reader for restore. They do not simulate or qualify a deployed Catalog service.
 
 | Failure | Retained behavior |
 |---|---|
-| Original work was running at interruption | Same execution reference required; no rerun |
+| Original work was running at interruption | Same execution and verified frame journal resume the committed prefix; legacy ambiguity refuses |
 | State, manifest or artifact bytes changed | Refuse; preserve evidence |
 | Blob committed before state write failed | State remains running; original execution can settle |
 | Manifest committed before completion flag | Finish the exact same manifest |

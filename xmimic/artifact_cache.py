@@ -391,6 +391,30 @@ class CacheEntry:
         clip.update(status="running", execution_ref=execution_ref)
         self._save()
 
+    def frame_progress(self, clip_id: str, execution_ref: str, *, total_frames: int,
+                       joint_count: int, landmark_count: int):
+        """Start or resume only the matching, durable frame-journal execution."""
+        from .retarget_progress import FrameJournal
+
+        def assert_active():
+            _require(self._active, "Cache entry lock is no longer held")
+        assert_active()
+        _require(not self._document["complete"], "Completed cache is immutable")
+        _require(isinstance(execution_ref, str) and bool(execution_ref), "Execution reference required")
+        clip = self._document["clips"][clip_id]
+        pending = clip["status"] == "pending"
+        _require(pending or (clip["status"] == "running" and clip["execution_ref"] == execution_ref),
+                 "Progress must resume the original running execution")
+        journal = FrameJournal(
+            self.path / ("progress-" + content_hash({"clip_id": clip_id})),
+            binding={"cache_key": self.identity.key, "clip_id": clip_id, "execution_ref": execution_ref},
+            total_frames=total_frames, joint_count=joint_count, landmark_count=landmark_count,
+            create=pending, assert_active=assert_active,
+        )
+        if pending:
+            self.start_clip(clip_id, execution_ref)
+        return journal
+
     def settle_clip(
         self,
         clip_id: str,
