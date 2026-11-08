@@ -236,7 +236,7 @@ def _validate(document: dict) -> CacheIdentity:
         )
         if status == "rejected" and clip["artifacts"]:
             _require(
-                set(clip["artifacts"]) <= {"candidate.npz", "retarget.json"}
+                set(clip["artifacts"]) <= {"candidate.npz", "retarget.json", "source-motion.json", "original-retarget.json"}
                 and clip["metadata"].get("training_admitted") is False,
                 "Rejected artifacts must be explicitly non-training diagnostics",
             )
@@ -392,7 +392,7 @@ class CacheEntry:
         self._save()
 
     def frame_progress(self, clip_id: str, execution_ref: str, *, total_frames: int,
-                       joint_count: int, landmark_count: int):
+                       joint_count: int, landmark_count: int, direction_count: int = 0):
         """Start or resume only the matching, durable frame-journal execution."""
         from .retarget_progress import FrameJournal
 
@@ -409,6 +409,7 @@ class CacheEntry:
             self.path / ("progress-" + content_hash({"clip_id": clip_id})),
             binding={"cache_key": self.identity.key, "clip_id": clip_id, "execution_ref": execution_ref},
             total_frames=total_frames, joint_count=joint_count, landmark_count=landmark_count,
+            direction_count=direction_count,
             create=pending, assert_active=assert_active,
         )
         if pending:
@@ -445,7 +446,7 @@ class CacheEntry:
         )
         if status == "rejected" and artifacts:
             _require(
-                set(artifacts) <= {"candidate.npz", "retarget.json"}
+                set(artifacts) <= {"candidate.npz", "retarget.json", "source-motion.json", "original-retarget.json"}
                 and metadata is not None
                 and metadata.get("training_admitted") is False,
                 "Rejected artifacts must be explicitly non-training diagnostics",

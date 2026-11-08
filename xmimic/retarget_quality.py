@@ -179,8 +179,8 @@ def qualify_motion(
             np.all(q >= np.asarray(meta["q_lo"]) - 1e-10)
             and np.all(q <= np.asarray(meta["q_hi"]) + 1e-10)
         ),
-        "landmark_position": bool(np.max(pe) <= quality.position_tolerance_m),
-        "landmark_orientation": bool(np.max(re) <= quality.orientation_tolerance_rad),
+        "landmark_position": bool(not pe.size or np.max(pe) <= quality.position_tolerance_m),
+        "landmark_orientation": bool(not re.size or np.max(re) <= quality.orientation_tolerance_rad),
         "root_projection": bool(np.max(np.abs(shifts)) <= quality.max_root_shift_m),
         "joint_speed": bool(np.max(speed) <= quality.max_joint_speed_rad_s),
         "floor_clearance": bool(
@@ -202,8 +202,8 @@ def qualify_motion(
         "max_abs_root_shift_m": float(np.max(np.abs(shifts))),
         "minimum_collision_geometry_z_m": float(np.min(ground_minima)),
         "max_joint_speed_rad_s": float(np.max(speed)),
-        "max_position_residual_m": float(np.max(pe)),
-        "max_orientation_residual_rad": float(np.max(re)),
+        "max_position_residual_m": float(np.max(pe)) if pe.size else None,
+        "max_orientation_residual_rad": float(np.max(re)) if re.size else None,
         "owner_scene_sha256": receipt["scene_sha256"],
         "owner_profile_sha256": receipt["profile_sha256"],
         "self_collision_qualified": False,

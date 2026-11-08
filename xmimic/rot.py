@@ -92,17 +92,22 @@ def so3_exp(v):
     return jnp.eye(3, dtype=v.dtype) + a[..., None] * K + b[..., None] * mm3(K, K)
 
 
-def quat_to_rotvec(q):
+def quat_to_rotvec(q, *, safe_zero: bool = False):
     q = q * jnp.where(q[..., :1] < 0, -1.0, 1.0)
     v = q[..., 1:]
-    sin_half = jnp.linalg.norm(v, axis=-1, keepdims=True)
+    if safe_zero:
+        square = jnp.sum(v*v, axis=-1, keepdims=True)
+        positive = square > 0
+        sin_half = jnp.where(positive, jnp.sqrt(jnp.where(positive, square, 1.)), 0.)
+    else:
+        sin_half = jnp.linalg.norm(v, axis=-1, keepdims=True)
     half = jnp.arctan2(sin_half, q[..., :1])
     scale = jnp.where(sin_half < 1e-6, 2.0 / jnp.maximum(q[..., :1], 1e-6), 2 * half / (sin_half + 1e-12))
     return v * scale
 
 
-def so3_log(R):
-    return quat_to_rotvec(mat_to_quat(R))
+def so3_log(R, *, safe_zero: bool = False):
+    return quat_to_rotvec(mat_to_quat(R), safe_zero=safe_zero)
 
 
 def rot_angle_sq(Ra, Rb):

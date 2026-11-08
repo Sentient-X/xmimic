@@ -7,6 +7,7 @@ use the same source-frame clock; the video may downsample display frames only.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -20,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 from xmimic.model import load_model
 from xmimic.retarget_source import parse_soma_bvh
 from xmimic.retarget_workflow import recipe_from_json
+from xmimic.retarget_target import TargetKind
 
 
 WIDTH, HEIGHT, PANEL_H, TOP = 1280, 800, 510, 66
@@ -54,6 +56,179 @@ def limit_hits(q, lower, upper, active, *, margin_rad=math.radians(0.5)):
     return (
         (q - np.asarray(lower) <= margin_rad) | (np.asarray(upper) - q <= margin_rad)
     ) & np.asarray(active)
+
+
+@dataclass(frozen=True)
+class DiagnosticMetrics:
+    goals_met: np.ndarray
+    position_mm: np.ndarray
+    orientation_rad: np.ndarray
+    direction_rad: np.ndarray
+    curve: np.ndarray
+    curve_tolerance: float
+    curve_label: str
+    direction_keys: tuple[str, ...]
+
+
+def diagnostic_metrics(geometric, profile, solver, frames):
+    """Read retained errors in recipe order; absent new constraints cannot pass."""
+    landmarks = profile.landmarks
+    directions = profile.directions
+
+    def matrix(name, columns):
+        values = np.asarray(geometric[name], dtype=float)
+        if (
+            values.shape != (frames, columns)
+            or not np.isfinite(values).all()
+            or np.any(values < 0)
+        ):
+            raise ValueError(f"Invalid retained {name} shape or values")
+        return values
+
+    position = matrix("position_residual_m", len(landmarks))
+    orientation = matrix("orientation_residual_rad", len(landmarks))
+    if "direction_residual_rad" in geometric:
+        direction = matrix("direction_residual_rad", len(directions))
+    elif directions:
+        raise ValueError("Direction targets lack retained angular residuals")
+    else:
+        direction = np.empty((frames, 0))  # legacy position/orientation reports
+    position = position[
+        :, [i for i, landmark in enumerate(landmarks) if landmark.position]
+    ]
+    orientation = orientation[
+        :, [i for i, landmark in enumerate(landmarks) if landmark.orientation]
+    ]
+
+    def maximum(values):
+        return values.max(axis=1) if values.shape[1] else np.zeros(frames)
+
+    pm, om, dm = maximum(position), maximum(orientation), maximum(direction)
+    goals_met = (
+        (pm <= solver.position_tolerance_m)
+        & (om <= solver.orientation_tolerance_rad)
+        & (dm <= solver.direction_tolerance_rad)
+    )
+    if directions:
+        curve, tolerance, label = (
+            np.degrees(dm),
+            math.degrees(solver.direction_tolerance_rad),
+            "Worst segment angle (degrees)",
+        )
+    elif position.shape[1]:
+        curve, tolerance, label = (
+            pm * 1000,
+            solver.position_tolerance_m * 1000,
+            "Worst constrained position error (mm)",
+        )
+    else:
+        curve, tolerance, label = (
+            om,
+            solver.orientation_tolerance_rad,
+            "Worst orientation error (rad)",
+        )
+    return DiagnosticMetrics(
+        goals_met,
+        pm * 1000,
+        om,
+        dm,
+        curve,
+        tolerance,
+        label,
+        tuple(direction.key for direction in directions),
+    )
+
+
+def segment_indices(profile, clip, model, body=None):
+    """Bind declared link/site points; canonical site offsets are not MuJoCo sites."""
+
+    def point(name, kind):
+        if kind is TargetKind.SITE:
+            if body is None:
+                raise ValueError(
+                    "Site directions require the canonical embodiment document"
+                )
+            site = body.site(name)
+            return model.body(site.link).id, np.asarray(site.pose.xyz, dtype=float)
+        return model.body(name).id, np.zeros(3)
+
+    return tuple(
+        (
+            clip.joint_index(direction.source_parent),
+            clip.joint_index(direction.source_child),
+            point(direction.target_parent, direction.kind),
+            point(direction.target_child, direction.kind),
+        )
+        for direction in profile.directions
+    )
+
+
+def target_point_position(data, point):
+    body_id, offset = point
+    return data.xpos[body_id] + data.xmat[body_id].reshape(3, 3) @ offset
+
+
+def set_candidate_frame(model, data, meta, positions, quats, q, frame):
+    address = meta["free_qpos_adr"]
+    data.qpos[address : address + 3] = positions[frame]
+    data.qpos[address + 3 : address + 7] = quats[frame]
+    data.qpos[meta["qpos_adr"]] = q[frame]
+    mujoco.mj_kinematics(model, data)
+
+
+def direction_errors(source, target, up):
+    """Unsigned raw angular/heading differences; a vertical heading is undefined."""
+    source, target = np.asarray(source, dtype=float), np.asarray(target, dtype=float)
+    if not np.isfinite(source).all() or not np.isfinite(target).all():
+        raise ValueError("Direction diagnostics require finite geometry")
+
+    def angle(a, b):
+        lengths = np.linalg.norm(a), np.linalg.norm(b)
+        if min(lengths) <= 1e-10:
+            return None
+        return math.degrees(
+            math.acos(float(np.clip((a / lengths[0]) @ (b / lengths[1]), -1, 1)))
+        )
+
+    angular = angle(source, target)
+    heading = (
+        None
+        if up is None
+        else angle(source - (source @ up) * up, target - (target @ up) * up)
+    )
+    return angular, heading
+
+
+def raw_direction_diagnostics(
+    profile, clip, segments, model, meta, positions, quats, q
+):
+    """Audit every candidate frame against observed pairs, without recipe offsets."""
+    pairs = [
+        (direction, segment)
+        for direction, segment in zip(profile.directions, segments, strict=True)
+    ]
+    result = {
+        direction.key: {"angular_deg": [], "projected_heading_error_deg": []}
+        for direction, _ in pairs
+    }
+    if not pairs:
+        return result
+    gravity = np.asarray(model.opt.gravity)
+    up = -gravity / np.linalg.norm(gravity) if np.linalg.norm(gravity) > 1e-10 else None
+    data = mujoco.MjData(model)
+    for frame in range(len(q)):
+        set_candidate_frame(model, data, meta, positions, quats, q, frame)
+        for direction, (parent, child, start, end) in pairs:
+            source = (
+                clip.world_positions[frame, child] - clip.world_positions[frame, parent]
+            )
+            target = target_point_position(data, end) - target_point_position(
+                data, start
+            )
+            angular, heading = direction_errors(source, target, up)
+            result[direction.key]["angular_deg"].append(angular)
+            result[direction.key]["projected_heading_error_deg"].append(heading)
+    return result
 
 
 def add_geom(scene, kind, position, size, color, *, end=None):
@@ -119,8 +294,26 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
         or len(q) != clip.frame_count
     ):
         raise ValueError("Candidate body, coordinate order or source timebase differs")
-    residual = np.asarray(report["geometric_result"]["position_residual_m"]) * 1000
-    orientation = np.asarray(report["geometric_result"]["orientation_residual_rad"])
+    metrics = diagnostic_metrics(
+        report["geometric_result"], recipe.target, recipe.solver, clip.frame_count
+    )
+    body = None
+    if any(direction.kind is TargetKind.SITE for direction in recipe.target.directions):
+        from sx_embodiments import Embodiment
+
+        body = Embodiment.from_json((Path(robot_path) / "embodiment.json").read_text())
+        if str(body.id) != body_id:
+            raise ValueError("Site geometry body differs from the retained candidate")
+    segments = segment_indices(recipe.target, clip, model, body)
+    direction_metrics = raw_direction_diagnostics(
+        recipe.target, clip, segments, model, meta, positions, quats, q
+    )
+    quality = report.get("nominal_quality_result")
+    quality_label = (
+        "not assessed"
+        if quality is None
+        else ("ACCEPTED" if quality["accepted"] else "REJECTED")
+    )
     active = [name not in dict(recipe.target.holds) for name in names]
     hits = limit_hits(q, meta["q_lo"], meta["q_hi"], active)
     joint_bodies = [model.jnt_bodyid[model.joint(name).id] for name in names]
@@ -155,7 +348,7 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
     root_index = clip.joint_index(recipe.source_root)
     target_names = [m.source for m in recipe.target.landmarks]
     sample_indices = display_indices(clip.frame_count, reference_fps, video_fps)
-    worst = int(residual.max(axis=1).argmax())
+    worst = int(metrics.curve.argmax())
     sheet_slots = set(
         np.linspace(0, len(sample_indices) - 1, 6).astype(int).tolist()
         + [int(np.abs(sample_indices - worst).argmin())]
@@ -191,17 +384,12 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
         str(output / "source-and-candidate.mp4"),
     ]
     process = subprocess.Popen(ffmpeg, stdin=subprocess.PIPE)
-    max_res = max(5.0, float(residual.max()) * 1.05)
+    max_res = max(
+        metrics.curve_tolerance * 1.2, float(metrics.curve.max()) * 1.05, 1e-6
+    )
     try:
         for number, frame in enumerate(sample_indices):
-            robot_data.qpos[meta["free_qpos_adr"] : meta["free_qpos_adr"] + 3] = (
-                positions[frame]
-            )
-            robot_data.qpos[meta["free_qpos_adr"] + 3 : meta["free_qpos_adr"] + 7] = (
-                quats[frame]
-            )
-            robot_data.qpos[meta["qpos_adr"]] = q[frame]
-            mujoco.mj_kinematics(model, robot_data)
+            set_candidate_frame(model, robot_data, meta, positions, quats, q, frame)
             mujoco.mj_camlight(model, robot_data)
             camera.lookat[:] = [*positions[frame, :2], 0.65]
             camera.distance = 2.25
@@ -236,6 +424,36 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
                     color,
                     end=human[joint],
                 )
+            for source_parent, source_child, target_parent, target_child in segments:
+                color = (
+                    [0.2, 1, 0.72, 1]
+                    if not clip.joint_names[source_child].startswith("Right")
+                    else [1, 0.55, 0.18, 1]
+                )
+                for scene, start, end in (
+                    (source_renderer.scene, human[source_parent], human[source_child]),
+                    (
+                        robot_renderer.scene,
+                        target_point_position(robot_data, target_parent),
+                        target_point_position(robot_data, target_child),
+                    ),
+                ):
+                    add_geom(
+                        scene,
+                        mujoco.mjtGeom.mjGEOM_CAPSULE,
+                        start,
+                        [0.016] * 3,
+                        color,
+                        end=end,
+                    )
+                    for point in (start, end):
+                        add_geom(
+                            scene,
+                            mujoco.mjtGeom.mjGEOM_SPHERE,
+                            point,
+                            [0.02] * 3,
+                            color,
+                        )
             for name in target_names:
                 add_geom(
                     source_renderer.scene,
@@ -276,25 +494,35 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
                 font=_font(19),
                 fill=(225, 235, 248),
             )
-            passed = bool(
-                np.all(residual[frame] <= recipe.solver.position_tolerance_m * 1000)
-                and np.all(
-                    orientation[frame] <= recipe.solver.orientation_tolerance_rad
-                )
-            )
+            passed = bool(metrics.goals_met[frame])
             draw.text(
                 (660, y),
-                f"Optimizer {recipe.solver.position_tolerance_m * 1000:g} mm gate: {'PASS' if passed else 'FAIL'}   |   near limits: {int(hits[frame].sum())}",
-                font=_font(19),
+                f"Geometry goals: {'MET' if passed else 'EXCEEDED'}",
+                font=_font(17),
                 fill=(80, 225, 170) if passed else (255, 133, 108),
             )
             draw.text(
+                (955, y),
+                f"Quality: {quality_label}",
+                font=_font(17),
+                fill=(80, 225, 170) if quality_label == "ACCEPTED" else (255, 180, 155),
+            )
+            position_label = (
+                f"position {metrics.position_mm[frame]:.1f} mm"
+                if any(landmark.position for landmark in recipe.target.landmarks)
+                else "position unconstrained"
+            )
+            angular = (
+                f"Segment {math.degrees(metrics.direction_rad[frame]):.2f}° / {math.degrees(recipe.solver.direction_tolerance_rad):g}°; "
+                if segments
+                else "No segment-direction targets; "
+            )
+            draw.text(
                 (20, y + 28),
-                "Position error mm  "
-                + "  ".join(
-                    f"{name}: {value:.1f}"
-                    for name, value in zip(target_names, residual[frame])
-                ),
+                angular
+                + f"orientation {metrics.orientation_rad[frame]:.4f} / {recipe.solver.orientation_tolerance_rad:g} rad"
+                + "; "
+                + position_label,
                 font=_font(15),
                 fill=(215, 225, 240),
             )
@@ -302,24 +530,25 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
             label = ", ".join(names_hit) if names_hit else "none"
             draw.text(
                 (20, y + 52),
-                "Red markers: active joints within 0.5° of a native limit.  " + label,
+                f"Near joint limits: {int(hits[frame].sum())} (red, within 0.5°).  "
+                + label,
                 font=_font(13),
                 fill=(255, 180, 155),
             )
             gx, gy, gw, gh = 30, y + 90, 1220, 70
-            curve = residual.max(axis=1)
+            curve = metrics.curve
             poly = [
                 (gx + i / (len(curve) - 1) * gw, gy + gh - v / max_res * gh)
                 for i, v in enumerate(curve)
             ]
             draw.line(poly, fill=(255, 190, 70), width=2)
-            gate_y = gy + gh - recipe.solver.position_tolerance_m * 1000 / max_res * gh
+            gate_y = gy + gh - metrics.curve_tolerance / max_res * gh
             draw.line((gx, gate_y, gx + gw, gate_y), fill=(240, 95, 100), width=1)
             marker = gx + frame / (len(curve) - 1) * gw
             draw.line((marker, gy, marker, gy + gh), fill=(220, 235, 255), width=2)
             draw.text(
                 (gx, gy - 18),
-                f"Full-clip maximum landmark error  (0–{max_res:.0f} mm); red line = optimizer goal",
+                f"{metrics.curve_label} over full clip (0–{max_res:.2f}); red = declared goal; green/orange = matched left/right segments",
                 font=_font(12),
                 fill=(175, 195, 215),
             )
@@ -355,6 +584,15 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
         "source_frame_indices": sample_indices.tolist(),
         "all_source_frames_retained_in_candidate": True,
         "physical_simulation": False,
+        "trained_policy": False,
+        "quality_acceptance": quality_label,
+        "direction_order": list(metrics.direction_keys),
+        "raw_direction_metrics": direction_metrics,
+        "raw_direction_metrics_scope": "all source frames; actual target point-pairs versus observed source pairs; no recipe offsets; unsigned degrees; null when direction or gravity-plane heading is undefined",
+        "gravity_m_s2": np.asarray(model.opt.gravity).tolist(),
+        "direction_tolerance_rad": recipe.solver.direction_tolerance_rad,
+        "orientation_tolerance_rad": recipe.solver.orientation_tolerance_rad,
+        "geometry_goals_met_frames": int(metrics.goals_met.sum()),
         "active_joint_limit_margin_rad": math.radians(0.5),
         "scope": "synchronized kinematic source/candidate diagnostic; raw source native proportions; original residual gate retained",
     }

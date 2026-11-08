@@ -81,7 +81,7 @@ def test_rejection_retains_all_frames_and_residuals_but_no_training_motion(tmp_p
     result, document = run(tmp_path, monkeypatch, data=source(True)[0])
     assert result.disposition is ClipDisposition.REJECTED
     clip = document['clips']['synthetic-clip']
-    assert set(clip['artifacts']) == {'candidate.npz', 'retarget.json'}
+    assert set(clip['artifacts']) == {'candidate.npz', 'retarget.json', 'source-motion.json'}
     assert clip['metadata']['training_admitted'] is False
     report = json.loads((result.directory/'blobs'/clip['artifacts']['retarget.json']['sha256']).read_text())
     assert report['frame_count'] == 8 and report['training_admitted'] is False
@@ -165,3 +165,54 @@ def test_zero_length_anatomical_segment_refuses_before_solver_start(tmp_path,mon
     states = list((tmp_path/'cache').glob('*/state.json'))
     assert len(states) == 1
     assert json.loads(states[0].read_text())['document']['clips']['synthetic-clip']['status'] == 'pending'
+
+
+def test_source_urr_identity_survives_target_proportion_changes(tmp_path, monkeypatch):
+    from sx_actions.urr import motion_from_dict
+    first, first_manifest = run(tmp_path, monkeypatch)
+    other, other_manifest = run(tmp_path, monkeypatch,
+        settings=replace(recipe(), landmark_scales=(('hand', .8),)))
+    source_members = []
+    for receipt, manifest in ((first, first_manifest), (other, other_manifest)):
+        files = manifest['clips']['synthetic-clip']['artifacts']
+        payload = (receipt.directory/'blobs'/files['source-motion.json']['sha256']).read_bytes()
+        motion = motion_from_dict(json.loads(payload))
+        report = json.loads((receipt.directory/'blobs'/files['retarget.json']['sha256']).read_bytes())
+        assert str(motion.id) == report['source_motion_id']
+        assert len(motion.frames) == 8
+        assert motion.frames[-1].time_ns == 233333333
+        source_members.append(payload)
+    assert source_members[0] == source_members[1]
+    assert first.cache_key != other.cache_key
+
+
+def test_direction_recipe_conversion_and_nominal_quality_cannot_erase_failure():
+    from xmimic.retarget_target import Direction, Landmark, TargetKind, TargetProfile
+    from xmimic.retarget_workflow import _direction_quality
+    target = TargetProfile((Landmark('hand', 'tip_site', orientation=True, position=False),),
+        holds=(('q3', .3),), directions=(Direction('Root', 'hand', 'base', 'tip'),))
+    setting = replace(recipe(), target=target, landmark_scales=())
+    assert recipe_from_json(canonical_json(asdict(setting)).encode()) == setting
+    report = {'accepted': True, 'checks': {'position': True}}
+    _direction_quality(report, np.full((8, 1), .5), setting, 8)
+    assert not report['accepted'] and not report['checks']['direction_residual']
+    with pytest.raises(ValueError, match='Complete retained direction'):
+        _direction_quality({'accepted': True, 'checks': {}}, None, setting, 8)
+    encoded = asdict(setting)
+    encoded['target']['directions'][0]['kind'] = TargetKind.SITE.value
+    assert recipe_from_json(canonical_json(encoded).encode()).target.directions[0].kind is TargetKind.SITE
+    legacy = asdict(recipe())
+    legacy['target'].pop('directions')
+    legacy['target']['landmarks'][0].pop('position')
+    legacy['solver'].pop('direction_tolerance_rad')
+    legacy['solver'].pop('direction_weight')
+    assert recipe_from_json(canonical_json(legacy).encode()) == recipe()
+
+
+def test_one_sample_calibration_cannot_enter_training_workflow(tmp_path, monkeypatch):
+    lines = source()[0].splitlines(keepends=True)
+    count = lines.index(b'Frames: 8\n')
+    lines[count] = b'Frames: 1\n'
+    single_sample = b''.join(lines[:count + 3])
+    with pytest.raises(ValueError, match='at least one 50 Hz control step'):
+        run(tmp_path, monkeypatch, data=single_sample)

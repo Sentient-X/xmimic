@@ -52,7 +52,8 @@ def analytic(q1, q2, yaw, translation):
 
 
 def inputs():
-    q1 = np.linspace(.2, .5, 8); q2 = np.linspace(.4, .6, 8)
+    q1 = np.linspace(.2, .5, 8)
+    q2 = np.linspace(.4, .6, 8)
     yaw = np.linspace(-.3, .2, 8)
     root_p = np.column_stack((np.linspace(.1, .3, 8), np.zeros(8), np.linspace(.5, .8, 8)))
     root_q = np.column_stack((np.cos(yaw/2), np.zeros(8), np.zeros(8), np.sin(yaw/2)))
@@ -116,12 +117,18 @@ def test_invalid_inputs_refuse_before_solving(tmp_path, monkeypatch, fault):
     body = fixture_body(tmp_path, monkeypatch)
     target = prepare_target(body, profile(), expected_embodiment_id=str(body.id))
     args, _, _ = inputs()
-    if fault == 'nan': args['positions']['hand'][0, 0] = np.nan
-    if fault == 'quat': args['root_quat'][0] *= 2
-    if fault == 'reflection': args['orientations']['hand'][0] *= -1
-    if fault == 'hold': args['initial_q'][2] = 0
-    if fault == 'mapping': args['positions']['other'] = args['positions'].pop('hand')
-    with pytest.raises(RetargetError): solve_sequence(target, **args)
+    if fault == 'nan':
+        args['positions']['hand'][0, 0] = np.nan
+    if fault == 'quat':
+        args['root_quat'][0] *= 2
+    if fault == 'reflection':
+        args['orientations']['hand'][0] *= -1
+    if fault == 'hold':
+        args['initial_q'][2] = 0
+    if fault == 'mapping':
+        args['positions']['other'] = args['positions'].pop('hand')
+    with pytest.raises(RetargetError):
+        solve_sequence(target, **args)
 
 
 def test_preflight_reports_owner_gaps_without_qualification(tmp_path, monkeypatch):
@@ -136,7 +143,8 @@ def test_preflight_reports_owner_gaps_without_qualification(tmp_path, monkeypatc
 def test_analytic_site_jacobian_matches_independent_finite_difference(tmp_path, monkeypatch):
     body = fixture_body(tmp_path, monkeypatch)
     target = prepare_target(body, profile(), expected_embodiment_id=str(body.id))
-    q = np.array([.6, .3, .3]); yaw = .4
+    q = np.array([.6, .3, .3])
+    yaw = .4
     root_q = np.array([math.cos(yaw/2),0,0,math.sin(yaw/2)])
     jac = target.jacobians(q, root_q)[0]
     # Independent planar equations, including the site's nonzero lever arm.
@@ -170,3 +178,117 @@ def test_coupled_nonplanar_orientation_solver(tmp_path, monkeypatch):
                             fps=30., initial_q=[0.,0.,.3],config=IKConfig(position_tolerance_m=1e-6,orientation_tolerance_rad=1e-6))
     assert result.feasible
     np.testing.assert_allclose(result.q, [[b,a,.3],[b,a,.3]], atol=1e-5)
+
+
+def test_direction_resolves_same_endpoint_opposite_elbow_branch(tmp_path, monkeypatch):
+    from xmimic.retarget_target import Direction
+
+    body = fixture_body(tmp_path, monkeypatch)
+    endpoint = Landmark('hand', 'tip', TargetKind.LINK)
+    direction = Direction('shoulder', 'elbow', 'base', 'b')
+    simple = TargetProfile((endpoint,), holds=(('q3', .3),))
+    target = prepare_target(body, replace(simple, directions=(direction,)),
+                            expected_embodiment_id=str(body.id))
+    angle = .6
+    args = dict(positions={'hand': np.tile([2*math.cos(angle), 0., 0.], (2, 1))},
+                root_p=np.zeros((2, 3)), root_quat=np.tile([1., 0., 0., 0.], (2, 1)),
+                initial_q=[2*angle, -angle, .3], fps=30.)
+    endpoint_only = solve_sequence(prepare_target(body, simple, expected_embodiment_id=str(body.id)), **args)
+    assert endpoint_only.feasible
+    np.testing.assert_array_equal(endpoint_only.q[0], args['initial_q'])
+    result = solve_sequence(target, **args,
+                            directions={direction.key: np.tile([math.cos(angle), math.sin(angle), 0.], (2, 1))},
+                            config=IKConfig(position_tolerance_m=1e-6, direction_tolerance_rad=1e-6, direction_weight=1.0))
+    assert result.feasible
+    np.testing.assert_allclose(result.q[:, :2], np.tile([-2*angle, angle], (2, 1)), atol=1e-5)
+    np.testing.assert_array_equal(result.q[:, 2], .3)
+    assert result.direction_residual_rad.shape == (2, 1)
+    assert np.max(result.direction_residual_rad) < 1e-6
+
+
+def test_orientation_only_landmark_needs_no_fabricated_position(tmp_path, monkeypatch):
+    body = fixture_body(tmp_path, monkeypatch)
+    p = TargetProfile((Landmark('hand', 'tip', TargetKind.LINK, orientation=True, position=False),),
+                      holds=(('q3', .3),))
+    target = prepare_target(body, p, expected_embodiment_id=str(body.id))
+    args, _, _ = inputs()
+    args['positions'] = {}
+    result = solve_sequence(target, **args, config=IKConfig(orientation_tolerance_rad=1e-6))
+    assert result.feasible
+    np.testing.assert_array_equal(result.position_residual_m, np.zeros((8, 1)))
+    np.testing.assert_allclose(result.q[:, :2].sum(axis=1), np.linspace(.6, 1.1, 8), atol=1e-6)
+    with pytest.raises(RetargetError, match='position or orientation'):
+        Landmark('nothing', 'tip', TargetKind.LINK, position=False)
+
+
+def test_direction_failure_and_resume_cannot_claim_endpoint_only_success(tmp_path, monkeypatch):
+    from xmimic.retarget_target import Direction
+
+    body = fixture_body(tmp_path, monkeypatch)
+    direction = Direction('shoulder', 'elbow', 'base', 'b')
+    p = TargetProfile((Landmark('hand', 'tip', TargetKind.LINK),),
+                      holds=(('q1', 0.), ('q2', 0.), ('q3', .3)), directions=(direction,))
+    target = prepare_target(body, p, expected_embodiment_id=str(body.id))
+    args = dict(positions={'hand': np.tile([2., 0., 0.], (2, 1))},
+                root_p=np.zeros((2, 3)), root_quat=np.tile([1., 0., 0., 0.], (2, 1)),
+                initial_q=[0., 0., .3], fps=30., directions={direction.key: np.tile([0., 1., 0.], (2, 1))})
+    saved = []
+    result = solve_sequence(target, **args, on_frame=saved.append)
+    assert not result.feasible
+    np.testing.assert_array_equal(result.position_residual_m, 0.)
+    np.testing.assert_allclose(result.direction_residual_rad, math.pi/2)
+    assert result.provenance()['direction_residual_rad'] == result.direction_residual_rad.tolist()
+    resumed = solve_sequence(target, **args, resume=tuple(saved),
+                             on_frame=lambda _: pytest.fail('completed frame repeated'))
+    np.testing.assert_array_equal(resumed.q, result.q)
+    np.testing.assert_array_equal(resumed.direction_residual_rad, result.direction_residual_rad)
+    with pytest.raises(RetargetError, match='direction diagnostics'):
+        solve_sequence(target, **args, resume=(replace(saved[0], direction_residual_rad=np.array([])),))
+    with pytest.raises(RetargetError, match='disposition'):
+        solve_sequence(target, **args, resume=(replace(saved[0], disposition=Disposition.GEOMETRICALLY_FEASIBLE),))
+    with pytest.raises(RetargetError, match='unit vectors'):
+        solve_sequence(target, **{**args, 'directions': {direction.key: np.zeros((2, 3))}})
+
+
+def test_direction_jacobian_matches_rotated_root_finite_difference(tmp_path, monkeypatch):
+    from xmimic.retarget_target import Direction
+
+    body = fixture_body(tmp_path, monkeypatch)
+    p = TargetProfile((), holds=(('q3', .3),),
+                      directions=(Direction('elbow', 'hand', 'b', 'tip'),))
+    target = prepare_target(body, p, expected_embodiment_id=str(body.id))
+    q, root_p = np.array([.6, .3, .3]), np.array([.2, -.1, .4])
+    root_q = np.array([math.cos(.2), 0., 0., math.sin(.2)])
+    parent, child = target.direction_indices[0]
+    def unit(q):
+        poses = target.poses(q, root_p, root_q)
+        v = poses[child][0] - poses[parent][0]
+        return v / np.linalg.norm(v)
+    poses = target.poses(q, root_p, root_q)
+    length = np.linalg.norm(poses[child][0]-poses[parent][0])
+    jac = target.jacobians(q, root_q)
+    u = unit(q)
+    analytic = (np.eye(3)-np.outer(u,u))/length @ (jac[child][:3]-jac[parent][:3])
+    epsilon = 1e-6
+    numeric = np.column_stack([(unit(q+epsilon*np.eye(3)[i])-unit(q-epsilon*np.eye(3)[i]))/(2*epsilon)
+                               for i in range(3)])
+    np.testing.assert_allclose(analytic, numeric, atol=1e-9)
+
+
+def test_shared_motion_binding_drives_direction_sites_with_offsets(tmp_path, monkeypatch):
+    from xmimic.retarget_target import Direction
+    body = fixture_body(tmp_path, monkeypatch)
+    body = replace(body, sites=(*body.sites,
+        BodySite('shoulder', ComponentId('arm'), 'base', Pose((.1, .2, 0.), (0., 0., 0.)))))
+    settings = TargetProfile((Landmark('hand', 'tip_site', orientation=True, position=False),),
+        holds=(('q3', .3),), directions=(Direction('shoulder', 'hand', 'shoulder', 'tip_site', kind=TargetKind.SITE),))
+    target = prepare_target(body, settings, expected_embodiment_id=str(body.id))
+    root_p, root_q = np.array([.4, .5, .6]), np.array([1., 0., 0., 0.])
+    actual = target.poses(np.array([.4, .2, .3]), root_p, root_q)
+    parent, child = target.direction_indices[0]
+    np.testing.assert_allclose(actual[parent][0], root_p + [.1, .2, 0.])
+    expected, _ = analytic(.2, .4, 0., root_p)
+    np.testing.assert_allclose(actual[child][0], expected)
+    conflicting = replace(settings, directions=(Direction('shoulder', 'hand', 'tip_site', 'shoulder', kind=TargetKind.SITE),))
+    with pytest.raises(RetargetError, match='Conflicting physical sites'):
+        prepare_target(body, conflicting, expected_embodiment_id=str(body.id))

@@ -15,7 +15,9 @@ import tempfile
 
 import mujoco
 import numpy as np
+from sx_actions.urr import MotionBinding, correspondence_scale
 from sx_contracts.identity import canonical_json
+from sx_geometry import FramedTransform, Pose
 from sx_embodiments import Embodiment
 from sx_embodiments.embodiment import embodiment_from_definition
 from sx_embodiments.known.humanoid import SENTIENT_HUMANOID_SPEC
@@ -25,16 +27,29 @@ from sx_embodiments.parts import ChainSpec, GripperSpec, Limb
 
 from xmimic.embodiment_bundle import TrainingProfile, adapt_nominal_bundle
 from xmimic.retarget_source import ParseLimits, parse_soma_bvh
-from xmimic.retarget_target import IKConfig, Landmark, TargetKind, TargetProfile
-from xmimic.retarget_workflow import RetargetRecipe, SegmentTarget
-from xmimic.retarget_quality import NominalQuality
+from xmimic.retarget_motion import motion_from_clip, motion_directions
+from xmimic.retarget_target import Direction, IKConfig, Landmark, TargetKind, TargetProfile, prepare_target, solve_sequence
+from xmimic.retarget_workflow import RetargetRecipe
+from xmimic.retarget_quality import NominalQuality, geometry_lowest_z
 
-EXPECTED_BODY = 'ca3fb7c3b69a4df643d21904d64b57c7d954c536dbb70660143d75133e53f317'
+# Same approved geometry; owner-defined pivot and CAD toe sites add semantic identity.
+EXPECTED_BODY = '1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c'
 # Nominal anatomical correspondence: source +Z forward, +X left, +Y up.
 WORLD_FROM_SOURCE = ((0.,0.,1.,0.),(1.,0.,0.,0.),(0.,1.,0.,0.),(0.,0.,0.,1.))
-TARGETS = (('LeftHand','left_wrist_roll_link'),('RightHand','right_wrist_roll_link'),
-           ('LeftFoot','left_foot2_link'),('RightFoot','right_foot2_link'))
+TARGETS = (('Chest','chest'),('LeftHand','left_wrist'),('RightHand','right_wrist'))
 SUPPORTS = ('left_foot2_link','right_foot2_link')
+# Declared source/site correspondence and experiment constraints, not inferred anatomy.
+CHAINS = (
+    (('LeftArm','LeftForeArm','LeftHand'),('left_shoulder','left_elbow','left_wrist')),
+    (('RightArm','RightForeArm','RightHand'),('right_shoulder','right_elbow','right_wrist')),
+    (('LeftLeg','LeftShin','LeftFoot'),('left_hip','left_knee','left_ankle')),
+    (('RightLeg','RightShin','RightFoot'),('right_hip','right_knee','right_ankle')),
+    (('LeftFoot','LeftToeEnd'),('left_ankle','left_toe_edge')),
+    (('RightFoot','RightToeEnd'),('right_ankle','right_toe_edge')),
+)
+SCALE_CHAINS = (('LeftLeg','LeftShin','LeftFoot'), ('RightLeg','RightShin','RightFoot'))
+REFERENCE_ORIENTATION_ROLES = ('Chest',)
+SOURCE_ROOT = 'Hips'
 
 
 def _control(body):
@@ -63,19 +78,13 @@ def _control(body):
 
 
 def _sole_height(model, data, link):
-    """Lowest collision vertex of the exact designated foot at the nominal pose."""
+    """Lowest collision extent of an explicitly designated support body."""
     body_id = model.body(link).id
     lows = []
     for geom in np.flatnonzero(model.geom_bodyid == body_id):
         if not model.geom_contype[geom] and not model.geom_conaffinity[geom]:
             continue
-        if model.geom_type[geom] != mujoco.mjtGeom.mjGEOM_MESH:
-            raise ValueError('This Sentient support derivation expects its canonical mesh collision')
-        mesh = model.geom_dataid[geom]
-        start,count = model.mesh_vertadr[mesh],model.mesh_vertnum[mesh]
-        vertices = model.mesh_vert[start:start+count]
-        world = vertices @ data.geom_xmat[geom].reshape(3,3).T + data.geom_xpos[geom]
-        lows.append(float(world[:,2].min()))
+        lows.append(geometry_lowest_z(model, data, geom))
     if not lows:
         raise ValueError('Designated support has no source collision geometry')
     low = min(lows)
@@ -96,7 +105,7 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
     assumptions = (
         'Development nominal simulation only; no hardware drive, physical qualification or standing claim.',
         'All joint PD gains, effort limits, armatures and action scales are experimental component-class choices.',
-        'Initial simulation pose is nearest bounded zero; IK seed bends knees +0.15 and hip pitch -0.075 rad, not calibrated Ready postures.',
+        'The supplied nominal reference configuration seeds all coordinates uniformly; it is not a calibrated Ready posture.',
         'waist_rod_joint, neck_yaw_joint and head_joint are fixed at zero as explicit nominal mechanism/head projections; no neck actuator facts are invented.',
         'foot2 links are designated support links; sole offsets use their lowest source collision vertex at nominal pose.',
         'Source-derived URDF inertials are preserved, including their existing estimates; they are not measured dynamics.',
@@ -124,45 +133,74 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
                     (.005,.005,.005),(.005,.005,.005),(.01,.01,.01),(.01,.01,.01),.005,.01,256,128)
     adapt_nominal_bundle(output/'robot',training)
     clip = parse_soma_bvh(source,world_from_source=WORLD_FROM_SOURCE)
-    source_root = clip.joint_index('Hips')
+    source_root = clip.joint_index(SOURCE_ROOT)
+    motion = motion_from_clip(clip, roles={name:name for name in clip.joint_names}, frame='soma_world', start_time_ns=0)
     # SOMA's XYZ channels replace OFFSET values; the current first-frame pose
     # is the explicitly selected calibration posture, not a fabricated rest pose.
     positions = {j.name:j.default_position for j in joints}
-    positions['waist_rod_joint']=0.
-    anatomy = (
-        ('LeftHand',('LeftArm','LeftForeArm','LeftHand'),('left_upper_arm_yaw_link','left_elbow_pitch_link','left_wrist_roll_link')),
-        ('RightHand',('RightArm','RightForeArm','RightHand'),('right_upper_arm_yaw_link','right_elbow_pitch_link','right_wrist_roll_link')),
-        ('LeftFoot',('LeftLeg','LeftShin','LeftFoot'),('left_hip_yaw_link','left_knee_link','left_foot2_link')),
-        ('RightFoot',('RightLeg','RightShin','RightFoot'),('right_hip_yaw_link','right_knee_link','right_foot2_link')),
-    )
-    segment_targets = []
-    leg_ratios = []
-    for landmark, source_nodes, robot_links in anatomy:
-        robot_points = [np.asarray(kin.pose(root,link,positions)).reshape(4,4)[:3,3] for link in robot_links]
-        lengths = [float(np.linalg.norm(b-a)) for a,b in zip(robot_points[:-1],robot_points[1:])]
-        segments = tuple((a,b,length) for a,b,length in zip(source_nodes[:-1],source_nodes[1:],lengths))
-        segment_targets.append(SegmentTarget(landmark,tuple(float(x) for x in robot_points[0]),segments))
-        if landmark.endswith('Foot'):
-            human_lengths = [np.linalg.norm(clip.world_positions[0,clip.joint_index(b)]-clip.world_positions[0,clip.joint_index(a)])
-                             for a,b in zip(source_nodes[:-1],source_nodes[1:])]
-            leg_ratios.append(sum(lengths)/sum(human_lengths))
-    root_scale = float(sum(leg_ratios)/len(leg_ratios))
-    orientation_offsets = tuple((name,tuple(tuple(row) for row in (
-            clip.world_rotations[0,clip.joint_index(name)].T @ np.asarray(kin.pose(root,link,positions)).reshape(4,4)[:3,:3])))
-            for name,link in TARGETS if name.endswith('Foot'))
-    # Align clip's first pelvis to the geometry-derived initial root height. This
-    # choice is explicit and clip-dependent, suitable only for this bounded smoke.
+    passive = (('waist_rod_joint',0.),('neck_yaw_joint',0.),('head_joint',0.))
+    positions.update(passive)
+    roles = dict(TARGETS)
+    directions = []
+    for source_nodes, sites in CHAINS:
+        roles.update(zip(source_nodes, sites, strict=True))
+        directions.extend(Direction(a,b,c,d,kind=TargetKind.SITE) for a,b,c,d in zip(
+            source_nodes[:-1],source_nodes[1:],sites[:-1],sites[1:],strict=True))
+    binding = MotionBinding(body, roles)
+    reference = binding.observe(time_ns=0, positions=positions,
+        reference=FramedTransform('soma_world', root, Pose(np.zeros(3), np.array([1.,0.,0.,0.]))))
+    root_scale = correspondence_scale(motion.frames[0], reference, SCALE_CHAINS)
     human_R = clip.world_rotations[0,source_root]
     root_offset_world = np.array([0.,0.,root_height-clip.world_positions[0,source_root,2]*root_scale])
     root_offset = human_R.T @ root_offset_world
-    held = tuple((j.name,j.default_position) for j in joints
-                 if 'finger_joint' in j.name or j.name in ('torso_joint','waist_roll_joint','waist_pitch_joint'))
-    target = TargetProfile(tuple(Landmark(name,link,TargetKind.LINK,orientation=name.endswith('Foot')) for name,link in TARGETS),
-                           held,(('waist_rod_joint',0.),('neck_yaw_joint',0.),('head_joint',0.)))
-    recipe = RetargetRecipe(target,WORLD_FROM_SOURCE,'Hips',
+    involved = set(binding.joint_names)
+    held = tuple((j.name,j.default_position) for j in joints if j.name not in involved)
+    initial = np.asarray([j.default_position for j in joints])
+    solver = IKConfig(max_iterations=60)
+    # Calibrate one real source sample. Unobserved components stay at their
+    # supplied reference state; singular/zero Jacobian columns are not frozen.
+    calibration_targets = tuple((role, roles[role]) for role in REFERENCE_ORIENTATION_ROLES)
+    calibration_profile = TargetProfile(
+        tuple(Landmark(name,site,TargetKind.SITE,orientation=True,position=False) for name,site in calibration_targets),
+        held,passive,tuple(directions))
+    calibration_target = prepare_target(body,calibration_profile,expected_embodiment_id=EXPECTED_BODY)
+    direction_values = {key:value[:1] for key,value in motion_directions(motion,
+        {mapping.key:(mapping.source_parent,mapping.source_child) for mapping in directions}).items()}
+    calibration_orientations = {name:np.asarray(body.site(site).transform(kin,root,positions)).reshape(4,4)[None,:3,:3]
+                                for name,site in calibration_targets}
+    calibration_p = clip.world_positions[0,source_root]*root_scale+human_R@root_offset
+    calibration_initial = initial.copy()
+    for name,value in calibration_profile.holds:
+        calibration_initial[body.joint_names.index(name)] = value
+    fitted = solve_sequence(calibration_target,{},root_p=calibration_p[None],
+        root_quat=np.array([[1.,0.,0.,0.]]),fps=clip.fps,initial_q=calibration_initial,
+        orientations=calibration_orientations,directions=direction_values,config=replace(solver,max_iterations=120))
+    fit_report = fitted.provenance()
+    fit_report['source_sha256'] = hashlib.sha256(source).hexdigest()
+    fit_report['calibration_scope'] = 'One real source frame used only for geometric reference calibration; no frames duplicated or synthesized for training.'
+    (output/'first-pose-fit.json').write_text(canonical_json(fit_report))
+    np.savez(output/'first-pose-fit.npz',q=fitted.q,root_p=fitted.root_p,root_quat=fitted.root_quat,
+             joint_names=np.asarray(body.joint_names),embodiment_id=np.asarray(str(body.id)),
+             scope=np.asarray('static reference calibration only; not a training motion'))
+    if not fitted.feasible:
+        raise ValueError('First-pose directional calibration failed; diagnostics retained in first-pose-fit.json')
+    fitted_positions = dict(zip(body.joint_names,fitted.q[0],strict=True))
+    fitted_positions.update(passive)
+    orientation_offsets = []
+    for name,link in TARGETS:
+        # Bind observed orientation changes to the fitted first pose, never an
+        # unrelated neutral posture. These are nominal frame correspondences,
+        # not measured tool calibration or a flat-sole/contact constraint.
+        q = fitted_positions
+        rotation = clip.world_rotations[0,clip.joint_index(name)].T @ np.asarray(body.site(link).transform(kin,root,q)).reshape(4,4)[:3,:3]
+        orientation_offsets.append((name,tuple(tuple(row) for row in rotation)))
+    final_initial = fitted.q[0].copy()
+    target = TargetProfile(tuple(Landmark(name,link,TargetKind.SITE,orientation=True,position=False) for name,link in TARGETS),
+                           held,passive,tuple(directions))
+    recipe = RetargetRecipe(target,WORLD_FROM_SOURCE,SOURCE_ROOT,
                            tuple(tuple(row) for row in human_R.T),
-                           tuple(float(v) for v in root_offset),root_scale,(),orientation_offsets,
-                           tuple((j.name,.15 if 'knee_joint' in j.name else (-.075 if 'hip_pitch_joint' in j.name else j.default_position)) for j in joints),IKConfig(max_iterations=60),tuple(segment_targets),
+                           tuple(float(v) for v in root_offset),root_scale,(),tuple(orientation_offsets),
+                           tuple((name,float(q)) for name,q in zip(body.joint_names,final_initial,strict=True)),solver,(),
                            NominalQuality(.03,.01,SUPPORTS,.002,.05,4.,6.,.001))
     (output/'recipe.json').write_text(canonical_json(asdict(recipe)))
     (output/'training-profile.json').write_text(canonical_json(asdict(training)))
@@ -172,9 +210,14 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
         'source_frame_time_literal':clip.frame_time_literal,'source_frames':clip.frame_count,
         'source_axis_assumption':'SOMA +Z forward, +X left, +Y up mapped to robot FLU',
         'source_pose_calibration_frame':0,'root_orientation_assumption':'first observed Hips orientation corresponds to upright forward robot root','root_height_m':root_height,
+        'scale_chains':SCALE_CHAINS,'reference_orientation_roles':REFERENCE_ORIENTATION_ROLES,
         'support_heights_m':{c.link:c.height_m for c in contacts},
-        'anatomical_scaling':'normalized source upper/lower arm and leg vectors with canonical target segment lengths and root anchors',
-        'retarget_scope':'wrist/ankle positions and calibrated foot orientations; explicit torso/neck/finger holds; no collision/contact/balance qualification',
+        'anatomical_scaling':'Observed source point-pair directions constrained against corresponding owner-defined physical sites through shared URR MotionBinding, including ankle-to-toe. Root translation scale uses the explicitly declared scale chains.',
+        'toe_correspondence':'Observed ankle-to-ToeEnd directions map to canonical ankle-to-front-sole-edge-midpoint directions. No fitted foot orientation offset, inferred sole normal or ground-contact label.',
+        'hand_orientation_calibration':'One source sample fitted to declared direction/reference-orientation constraints from the supplied nominal state; only coordinates outside binding ancestry are held. Fitted site-frame offsets are nominal, not measured tool/contact calibration.',
+        'first_pose_fit_sha256':hashlib.sha256((output/'first-pose-fit.json').read_bytes()).hexdigest(),
+        'first_pose_direction_max_rad':float(fitted.direction_residual_rad.max()),
+        'retarget_scope':'Eight limb directions and two observed ankle-to-toe directions plus chest/hand orientations; torso/waist free, unobserved native coordinates held, passive coordinates explicit. Diagnostic only until whole-pose and visual review; no collision/contact/balance qualification',
         'training_admitted':False}
     (output/'calibration.json').write_text(canonical_json(calibration))
     return body, recipe, calibration

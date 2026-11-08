@@ -203,3 +203,16 @@ def test_retained_requalification_preserves_old_rejection_and_reuses_verified_ca
             cache=target,
             execution_ref="changed",
         )
+
+
+def test_direction_only_nominal_quality_reaches_explicit_direction_gate(tmp_path):
+    from test_retarget_workflow import recipe
+    from xmimic.retarget_target import Direction, TargetProfile
+    from xmimic.retarget_workflow import _direction_quality
+    arrays, report = qualify_motion(motion(), np.zeros((3, 0)), np.zeros((3, 0)), bundle(tmp_path), contract())
+    assert report['max_position_residual_m'] is None
+    assert report['max_orientation_residual_rad'] is None
+    directional = replace(recipe(), target=TargetProfile((), directions=(Direction('A', 'B', 'a', 'b'),)),
+                          landmark_scales=(), orientation_offsets=())
+    _direction_quality(report, np.full((3, 1), .5), directional, len(arrays['q']))
+    assert not report['accepted'] and not report['checks']['direction_residual']
