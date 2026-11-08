@@ -578,3 +578,53 @@ The earlier neutral-foot variant passed0frames; its599frames remain separately r
 This run establishes shared representation/custody and honest rejection, not solved
 retargeting or training readiness. Next investigation is the constrained solver's remaining
 forearm fit, including limit saturation and orientation tradeoffs, without altering raw labels.
+
+### Generality audit: remove application-specific heuristics
+
+The owner explicitly requires generic algorithms; embodiment-name branches and special
+adjustments signal missing abstractions, even inside examples or JSON. First classify
+physical facts/source semantics/explicit experiment assumptions separately from inferred
+behavior. Preserve input declarations; fix the owning capability for the latter.
+
+Observed fixes: removed knee/hip substring seed offsets, finger-name hold selection,
+terminal wrist/foot name holds, Foot-suffix scale selection and mesh-only support math.
+Shared actions commit7507a26c (`sx` PR3579, stacked on PR3562) supplies
+`MotionBinding.joint_names` and `correspondence_scale`. Bound-site ancestry includes
+shared ancestors and off-path mimic leaders but excludes unrelated components. Hold its
+complement at the supplied reference state; never freeze coordinates because their
+initial Jacobian happens to be zero. Explicit corresponding polyline roles determine
+scale through one shared operation, invariant to independent rigid placement and without
+mutating source motion. The example consumes these capabilities instead of hiding the
+old conditions in a per-robot configuration.
+
+Single-sample geometric fitting now accepts the real first frame; no duplicate synthetic
+frame is needed. Source/training workflow and NPZ export still refuse a one-frame training
+motion. With exact source/owner/URR packages, the actual Sentient reference calibration
+passed at unchanged tolerances in42iterations, worst direction4.8262degrees, without
+named posture tweaks. Evidence is `nominal-approved-ca3fb7/generic-reference-v1/`.
+This is one calibration, not another whole-clip or trained-policy success.
+
+```bash
+JAX_PLATFORMS=cpu python -m pytest -q tests/test_retarget_generality.py \
+  tests/test_retarget_target.py tests/test_retarget_workflow.py \
+  tests/test_retarget_progress.py tests/test_retarget_quality.py \
+  tests/test_retarget_motion.py tests/test_artifact_cache.py tests/test_render_retarget.py
+```
+
+Observed106passed,5existing skipped managed-runtime tests (installed package lacks
+`sx_training.artifacts`). The new generality tests use actual owner bodies with one and
+three non-anatomically named branches and an unobserved branch. Renaming all joint/link/
+site/source-role/component identities and permuting native/URDF order preserves the
+physical solution to1e-10. Shared actions35tests passed; strict Pyright and Ruff passed.
+Its exact35-file source snapshot and commit/hash receipt live under
+`generic-reference-v1/dependencies`; do not repoint the shared venv. Isolated worktree
+was removed after verification, and no redundant CI or paid run was dispatched.
+
+| Failure | Cause | Owner/fix |
+| --- | --- | --- |
+| Example behavior depends on anatomical substrings | Missing dependency and reference-state abstraction | Shared MotionBinding ancestry plus supplied reference state |
+| Calibration invents a second frame | Tracker duration leaked into geometric fitting | Permit one geometric sample; preserve training-duration admission |
+| Generic claim despite duplicate coupled solvers | Shared action solver also requires executable action semantics | Separate shared geometric problem/result from action admission, then remove duplicate consumers' implementations |
+
+Do not claim the last owning-layer gap is resolved by these tests. Numeric generality,
+shared ownership, full motion fidelity and physical qualification are separate evidence.

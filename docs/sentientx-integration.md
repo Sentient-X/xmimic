@@ -227,3 +227,36 @@ Complete-clip validation remains unsuccessful: the corrected-calibration599-fram
 passed geometric goals on7frames, with maximum limb-direction63.34degrees and
 orientation52.90degrees. It failed direction, orientation and speed checks and retained
 only diagnostic output plus the unchanged URR source. No GPU training was started.
+
+### Generality is an acceptance condition
+
+Embodiment-specific behavior in the retargeting algorithm indicates a missing owner
+capability; putting that behavior into an example or configuration file does not fix it.
+Bodies supply canonical geometry, native ordering, limits, sites and physical relations.
+Source adapters supply observed roles, units, clocks and coordinate frames. Experiments
+supply explicit reference configurations, role/site correspondences, root placement,
+weights and nominal simulation assumptions. The algorithm must not infer those facts
+from a robot name, a joint-name substring or a fixed number of limbs.
+
+Shared actions revision `7507a26c009f3ec10ad25bc10f63e3c7cfa3099d` adds
+`MotionBinding.joint_names` (canonical-order site dependencies, including mimic leaders)
+and `correspondence_scale` over explicitly declared role chains. The example now holds
+only the complement of those dependencies at supplied reference values. Named knee/hip
+seed offsets and wrist/ankle terminal-roll holds are removed. A zero Jacobian at a
+singular pose does not freeze a coordinate. Support calculations reuse the existing
+geometry extent operation, without a Sentient mesh-only branch.
+
+The geometric solver accepts one actual observation for calibration. Training duration
+checks remain at the workflow/export boundary, so a static calibration cannot become a
+training motion. Tests cover a fixed-base mechanism and three branches, an unobserved
+branch, and complete renaming/reordering of joints, links, sites and source roles. These
+establish numerical invariance, not support for every articulation or physical dynamics.
+
+Remaining owning-layer gap: `sx_actions.whole_body` combines geometric fitting with
+executable action admission, while XMimic maintains an offline geometric implementation.
+Consolidation must separate the shared geometric problem/result from action admission,
+then make both consumers use it. Remove the duplicated geometric implementations when
+both consumers are served; keep frame journals and clip sequencing in XMimic. Do not
+fabricate actuator contracts, add a nominal bypass to command admission, or merely move
+the offline solver into another wrapper. Until that work and whole-motion qualification
+are complete, this fork is not qualified as a general embodiment training capability.

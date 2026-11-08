@@ -207,3 +207,12 @@ def test_direction_recipe_conversion_and_nominal_quality_cannot_erase_failure():
     legacy['solver'].pop('direction_tolerance_rad')
     legacy['solver'].pop('direction_weight')
     assert recipe_from_json(canonical_json(legacy).encode()) == recipe()
+
+
+def test_one_sample_calibration_cannot_enter_training_workflow(tmp_path, monkeypatch):
+    lines = source()[0].splitlines(keepends=True)
+    count = lines.index(b'Frames: 8\n')
+    lines[count] = b'Frames: 1\n'
+    single_sample = b''.join(lines[:count + 3])
+    with pytest.raises(ValueError, match='at least one 50 Hz control step'):
+        run(tmp_path, monkeypatch, data=single_sample)

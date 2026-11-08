@@ -327,6 +327,8 @@ class RetargetSequence:
 
     def npz_arrays(self):
         _require(self.feasible, "Infeasible sequence cannot be exported as a training motion")
+        _require(len(self.q) >= 2 and (len(self.q)-1)/self.fps >= .02,
+                 "A static calibration is not a training motion")
         return {"root_p": self.root_p, "root_quat": self.root_quat, "q": self.q,
                 "fps": np.asarray(self.fps), "joint_names": np.asarray(self.binding.joint_names),
                 "embodiment_id": np.asarray(self.binding.embodiment_id),
@@ -386,10 +388,11 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
     _require(math.isfinite(fps) and fps > 0, "Positive finite source FPS required")
     root_p = np.array(root_p, dtype=np.float64, copy=True)
     root_quat = np.array(root_quat, dtype=np.float64, copy=True)
-    _require(root_p.ndim == 2 and root_p.shape[1] == 3 and len(root_p) >= 2 and np.isfinite(root_p).all(),
-             "Root position must be finite (T,3), T>=2")
+    _require(root_p.ndim == 2 and root_p.shape[1] == 3 and len(root_p) >= 1 and np.isfinite(root_p).all(),
+             "Root position must be finite (T,3), T>=1")
     T = len(root_p)
-    _require((T-1)/fps >= 0.02, "Sequence must span at least one 50 Hz control step")
+    # Geometry also serves single-sample calibration; training duration belongs
+    # to the workflow/motion loader, not to the kinematic solve.
     _require(root_quat.shape == (T, 4) and np.isfinite(root_quat).all()
              and np.allclose(np.linalg.norm(root_quat, axis=1), 1, rtol=0, atol=1e-6),
              "Root quaternion must be unit wxyz (T,4)")
