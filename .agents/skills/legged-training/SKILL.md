@@ -1100,3 +1100,41 @@ not native learning scores. Preserve attempt/provider/cost evidence under
 images, verify exact grants and serving source, then make a separately bound
 corrected attempt. Never retry an ambiguous native paid child or treat acquisition,
 image publication or an accepted Job as completed training.
+
+### Native runtime qualification after the first launch failure
+
+Corrected CPU/CUDA publication 42506620271 passed the actual installed SDK proof
+through provider-aliased data/cache/exact Job mounts. Before the changed native
+attempt, live check `runtime-correction-v2/serving-20261108T191832Z.json` verified
+all 11 owner module hashes in both ready roles, exact immutable runtime grants,
+schema 0019 and authenticated Catalog ReadAsset. Source `217b321b`/API `6200697` was
+serving; a grant-module-only check would not have qualified the launcher repairs.
+Fresh failed-Job containment was empty. Corrected Job `73935460` was then accepted
+once at 19:19:20 UTC, preserving original 3500/seed 1/H100/$8/3600 semantics and a
+distinct durable idempotency key. Its recent heartbeat/attempt 1/recovery 0 evidence
+crossed the old 120s failure boundary while placement remained pending. Do not turn
+RUNNING, successful staging or heartbeat liveness into a GPU/training claim.
+
+| Native runtime failure | Proven cause | Owner correction and evidence |
+| --- | --- | --- |
+| Editable install cannot import Poetry; manually listed source dependencies disagree | Pinned rl-games pyproject owns the backend and dependencies, superseding legacy setup.py | Prepare all 6 actual editable METADATA using 7 hash-locked backend packages; select Linux markers; resolve 161 native dependencies under complete untouched vendor constraints; regenerate/compare metadata inside the Linux image before installation |
+| Image pushes successfully but publication fails required metadata | Authored Dockerfile retained incomplete base labels; Bake supplied only title/description | Shared generator supplies vendor/source/inventory-license labels for every built target; exact mirrors remain unchanged. Independent comparison found only 3 label additions across 31 targets; 13 focused metadata/authored tests passed |
+| A metadata correction appears to require another expensive native build | Publication failed after complete immutable layers had already been pushed | Preserve BuildKit/registry state. Changed publication 42515309040 reused successful42511520865 native/SDK proof layers; layer push 11.8s versus 1,315.7s initially; complete publication step 44.641s |
+
+The final private PolicyIK runtime is
+`registry.sentientx.io/sx/cloud/sx-policyik-runtime@sha256:d59c2c61396d22387a1a5aeb5789eb92509aabbaf654c60dda165db4ebe6201c`,
+source `e353302380`. Actual registry metadata readback passed; 167 installed native
+distributions and the supervisor mount/artifact checks passed. Evidence is
+`runtime-metadata/policyik-pep517-v1/{candidate-result.json,publication-result.json}`.
+The full logs, locked metadata and source/backend receipts remain beside them.
+The earlier `d4f` digest remains failed-publication evidence and must not be granted.
+
+Preconditions for the next paid command: final verified immutable image, exact
+project grant serving with the reviewed launcher code, EVALUATION/false input pack,
+original released-checkpoint deployment protocol, L40S and explicit spend/deadline.
+Prepare seeds 1/2/3 independently and run evaluate_deployment directly, retaining its
+single/corrected/eight transient outputs rather than paying for single twice.
+Stop at ambiguous child intent, changed source/output identity or a new failure;
+preserve paid work and change the proven cause before a new attempt. Installation,
+cached publication and lock-only security scans establish neither GPU simulation
+nor native scores, production promotion or physical robot permission.

@@ -124,3 +124,51 @@ must not change command identity or rerun a completed child. Links inside the st
 source, output or checkpoint closure remain refused. The runtime image must contain
 this same SDK contract; its installation proof reads an admitted file through linked
 mount roots before any native GPU attempt is made.
+
+## Corrected runtime and publication evidence
+
+On 2026-11-08, corrected CPU and CUDA runtime publication 42506620271 produced
+`sx-xmimic-cpu@sha256:9923109ca044b6952df1abf3d92e381ae4522a8fec9cf6ead89b38e0bfadddef`
+and
+`sx-xmimic-cuda12@sha256:0a448e7a9cfc64be0ef1dd89f39edb087cae0067b4eeed2372ba26b35bd44d1f`
+under `registry.sentientx.io/sx/cloud/`. Both contain native worker `20f067b` and
+passed the installed exact-mount behavior proof.
+
+The 19:18 UTC live acceptance verified all 11 reviewed module hashes across the
+ready API/dispatcher roles, both exact project grants, schema 0019/JSONB and an
+authenticated Catalog ReadAsset of the original native input manifest. The serving
+API image was `6200697`, source `217b321b`. Receipt:
+`data/native-baselines/runtime-correction-v2/serving-20261108T191832Z.json`.
+Fresh containment found no unfinished Sandbox for the failed original Job. The
+separate corrected Job `ftjob_73935460dead4ce68eb83b4aaf327a36` was accepted at
+19:19:20 UTC with the same original 3,500-iteration seed1 protocol, one H100,
+$8/3,600-second limits. Acceptance and RUNNING do not establish device execution,
+native training or a score. Cold placement has retained one activity attempt and
+recent heartbeats across the earlier 120-second failure boundary, with no recovery
+generation. Its immutable intent and watch evidence remain under `submissions/`.
+
+Native PolicyIK required the actual PEP517 editable metadata of all six pinned
+source packages. The legacy rl-games setup.py list omitted its authoritative
+Poetry backend and gym0.23/psutil5/ray/wandb requirements. The owning runtime now
+regenerates and compares source/backend metadata on Linux before installation,
+keeps the vendor SDK unchanged and checks the complete isolated dependency graph.
+Its 161 locked dependencies plus 6 source distributions passed native imports and
+the managed mount/artifact proof in candidate 42511520865. That candidate pushed
+its image but failed required registry metadata validation; it is retained as
+failed-publication evidence, not an admitted runtime.
+
+The shared image generator correction supplies all three missing inventory-owned
+OCI labels for built targets while preserving exact upstream mirrors. Changed
+publication 42515309040 passed actual Zot metadata readback and produced:
+
+`registry.sentientx.io/sx/cloud/sx-policyik-runtime@sha256:d59c2c61396d22387a1a5aeb5789eb92509aabbaf654c60dda165db4ebe6201c`
+
+Source is `e353302380`. The unchanged native/import/SDK proof layers were reused
+from durable cache: layer push 11.8s, manifest 21.4s, publication step 44.641s. The
+first push had taken 1,315.7s after 204.8s export. These are build/publication times,
+not model execution times. Full logs and final receipt are retained under
+`data/native-baselines/runtime-metadata/policyik-pep517-v1/publication-result.json`.
+This is a private research runtime publication, not production security or GPU
+simulation qualification. Exact project authorization, live configuration and the
+original L40S evaluation still require their own evidence. Do not use the earlier
+failed-publication digest or infer native scores from these installation checks.
