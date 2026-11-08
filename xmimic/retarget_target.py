@@ -6,7 +6,7 @@ infer a human/robot root correspondence, balance, collisions, drives or dynamics
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 import hashlib
 import math
@@ -59,13 +59,37 @@ class Landmark:
     kind: TargetKind = TargetKind.SITE
     orientation: bool = False
     weight: float = 1.0
+    position: bool = True
 
     def __post_init__(self):
         _require(isinstance(self.source, str) and self.source.strip()
                  and isinstance(self.target, str) and self.target.strip(), "Landmarks need explicit source and target names")
         _require(isinstance(self.kind, TargetKind), "Unknown target kind")
-        _require(type(self.orientation) is bool, "Orientation selection must be explicit boolean")
+        _require(type(self.orientation) is bool and type(self.position) is bool, "Position/orientation selection must be explicit boolean")
+        _require(self.position or self.orientation, "Landmark needs position or orientation")
         _require(math.isfinite(self.weight) and self.weight > 0, "Landmark weight must be positive")
+
+
+@dataclass(frozen=True)
+class Direction:
+    """A source bone direction mapped to two explicit canonical link origins."""
+    source_parent: str
+    source_child: str
+    target_parent: str
+    target_child: str
+    weight: float = 1.0
+
+    def __post_init__(self):
+        _require(all(isinstance(n, str) and n.strip() for n in (
+            self.source_parent, self.source_child, self.target_parent, self.target_child)),
+            "Direction needs explicit source and target endpoints")
+        _require(self.source_parent != self.source_child and self.target_parent != self.target_child,
+                 "Direction endpoints must differ")
+        _require(math.isfinite(self.weight) and self.weight > 0, "Direction weight must be positive")
+
+    @property
+    def key(self):
+        return self.source_parent + "->" + self.source_child
 
 
 @dataclass(frozen=True)
@@ -73,13 +97,17 @@ class TargetProfile:
     landmarks: tuple[Landmark, ...]
     holds: tuple[tuple[str, float], ...] = ()
     nominal_passive: tuple[tuple[str, float], ...] = ()
+    directions: tuple[Direction, ...] = ()
 
     def __post_init__(self):
         # Tuples ensure caller-owned lists/maps cannot change a prepared binding.
         object.__setattr__(self, "landmarks", tuple(self.landmarks))
         object.__setattr__(self, "holds", tuple((n, float(v)) for n, v in self.holds))
         object.__setattr__(self, "nominal_passive", tuple((n, float(v)) for n, v in self.nominal_passive))
-        _require(self.landmarks and all(isinstance(x, Landmark) for x in self.landmarks), "Explicit landmarks required")
+        object.__setattr__(self, "directions", tuple(self.directions))
+        _require((self.landmarks or self.directions) and all(isinstance(x, Landmark) for x in self.landmarks), "Explicit pose targets required")
+        _require(all(isinstance(x, Direction) for x in self.directions), "Invalid direction target")
+        _require(len({x.key for x in self.directions}) == len(self.directions), "Repeated source direction")
         _require(len({x.source for x in self.landmarks}) == len(self.landmarks), "Repeated source landmark")
         _require(len({(x.kind, x.target) for x in self.landmarks}) == len(self.landmarks), "Repeated target landmark")
         for values in (self.holds, self.nominal_passive):
@@ -111,6 +139,7 @@ class PreparedTarget:
     free_indices: tuple[int, ...]
     chains: tuple[KinematicChain, ...]
     chain_coordinates: tuple[tuple[tuple[int, float, float], ...], ...]
+    direction_indices: tuple[tuple[int, int], ...] = ()
 
     def poses(self, q, root_p, root_quat):
         root_R = quat_to_mat(np.asarray(root_quat, dtype=np.float64))
@@ -196,6 +225,18 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
         else:
             link, offset = mapping.target, tuple(np.eye(4).ravel())
         _require(link in kin.links, f"Unknown target link {link}")
+        frames.append((link, tuple(offset)))
+    direction_indices = []
+    for direction in profile.directions:
+        indices = []
+        for link in (direction.target_parent, direction.target_child):
+            _require(link in kin.links, f"Unknown direction link {link}")
+            frame = (link, tuple(np.eye(4).ravel()))
+            if frame not in frames:
+                frames.append(frame)
+            indices.append(frames.index(frame))
+        direction_indices.append(tuple(indices))
+    for link, _ in frames:
         _, path = kin.path(root, link)
         for joint in path:
             if joint.type is JointType.FIXED:
@@ -203,7 +244,6 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
             while joint.mimic is not None:
                 joint = kin.joints[joint.mimic.leader]
             ancestors.add(joint.name)
-        frames.append((link, tuple(offset)))
     unmatched = native - ancestors
     _require(unmatched <= set(holds), f"Unmatched coordinates need explicit holds: {sorted(unmatched-set(holds))}")
     binding = TargetBinding(str(body.id), sha, names, tuple(lower), tuple(upper), root, profile)
@@ -223,7 +263,7 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
                 coordinates.append((names.index(joint.name), scale, bias))
         chain_coordinates.append(tuple(coordinates))
     return PreparedTarget(binding, kin, tuple(frames), tuple(i for i, name in enumerate(names) if name not in holds),
-                          chains, tuple(chain_coordinates))
+                          chains, tuple(chain_coordinates), tuple(direction_indices))
 
 
 @dataclass(frozen=True)
@@ -234,6 +274,8 @@ class IKConfig:
     position_tolerance_m: float = 0.002
     orientation_tolerance_rad: float = 0.01
     orientation_weight: float = 0.2
+    direction_tolerance_rad: float = math.radians(5)
+    direction_weight: float = 0.2
 
     def __post_init__(self):
         _require(type(self.max_iterations) is int and self.max_iterations > 0, "Positive iteration budget required")
@@ -253,6 +295,7 @@ class RetargetSequence:
     orientation_residual_rad: np.ndarray
     iterations: tuple[int, ...]
     dispositions: tuple[Disposition, ...]
+    direction_residual_rad: np.ndarray = field(default_factory=lambda: _readonly([]))
 
     @property
     def feasible(self):
@@ -271,7 +314,8 @@ class RetargetSequence:
                 "solver": asdict(self.config), "root_mode": "explicit_world_from_urdf_root",
                 "dispositions": [x.value for x in self.dispositions], "iterations": list(self.iterations),
                 "position_residual_m": self.position_residual_m.tolist(),
-                "orientation_residual_rad": self.orientation_residual_rad.tolist()}
+                "orientation_residual_rad": self.orientation_residual_rad.tolist(),
+                "direction_residual_rad": self.direction_residual_rad.tolist()}
 
 
 def _rotations(value, shape):
@@ -291,6 +335,7 @@ class RetargetFrame:
     orientation_residual_rad: np.ndarray
     iterations: int
     disposition: Disposition
+    direction_residual_rad: np.ndarray = field(default_factory=lambda: _readonly([]))
 
 
 class RetargetInterrupted(RuntimeError):
@@ -303,6 +348,7 @@ class RetargetInterrupted(RuntimeError):
 
 def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], *, root_p,
                    root_quat, fps: float, initial_q, orientations: Mapping[str, np.ndarray] | None = None,
+                   directions: Mapping[str, np.ndarray] | None = None,
                    config: IKConfig = IKConfig(), resume: tuple[RetargetFrame, ...] = (),
                    on_frame: Callable[[RetargetFrame], None] | None = None,
                    stop_requested: Callable[[], bool] = lambda: False) -> RetargetSequence:
@@ -323,7 +369,7 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
     _require(root_quat.shape == (T, 4) and np.isfinite(root_quat).all()
              and np.allclose(np.linalg.norm(root_quat, axis=1), 1, rtol=0, atol=1e-6),
              "Root quaternion must be unit wxyz (T,4)")
-    required = {m.source for m in b.profile.landmarks}
+    required = {m.source for m in b.profile.landmarks if m.position}
     _require(set(positions) == required, "Source positions must match the explicit landmark mapping")
     points = {}
     for name, value in positions.items():
@@ -334,6 +380,15 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
     orientations = {} if orientations is None else orientations
     _require(set(orientations) == required_orientations, "Source orientations must match explicit orientation constraints")
     rotations = {name: _rotations(value, (T, 3, 3)) for name, value in orientations.items()}
+    directions = {} if directions is None else directions
+    _require(set(directions) == {d.key for d in b.profile.directions}, "Source directions must match explicit direction constraints")
+    desired_directions = {}
+    for name, value in directions.items():
+        array = np.array(value, dtype=np.float64, copy=True)
+        _require(array.shape == (T, 3) and np.isfinite(array).all()
+                 and np.allclose(np.linalg.norm(array, axis=1), 1, atol=1e-6, rtol=0),
+                 f"{name}: directions must be finite world unit vectors")
+        desired_directions[name] = array
     lo, hi = np.asarray(b.lower), np.asarray(b.upper)
     seed = np.array(initial_q, dtype=np.float64, copy=True)
     _require(seed.shape == lo.shape and np.isfinite(seed).all() and np.all(seed >= lo) and np.all(seed <= hi),
@@ -341,7 +396,7 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
     for name, value in b.profile.holds:
         _require(seed[b.joint_names.index(name)] == value, "Initial state disagrees with explicit hold")
     free = np.asarray(target.free_indices, dtype=int)
-    q_out, p_out, r_out, dispositions, iterations = [], [], [], [], []
+    q_out, p_out, r_out, d_out, dispositions, iterations = [], [], [], [], [], []
     _require(len(resume) <= T, "Retained prefix exceeds source sequence")
     for index, saved in enumerate(resume):
         _require(saved.index == index and saved.q.shape == lo.shape
@@ -356,13 +411,18 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
                  "Retained frame diagnostics differ")
         for name, value in b.profile.holds:
             _require(saved.q[b.joint_names.index(name)] == value, "Retained frame changed held coordinates")
-        ok = (np.all(saved.position_residual_m <= config.position_tolerance_m)
+        _require(saved.direction_residual_rad.shape == (len(b.profile.directions),)
+                 and np.isfinite(saved.direction_residual_rad).all()
+                 and np.all(saved.direction_residual_rad >= 0), "Retained direction diagnostics differ")
+        ok = (np.all(saved.direction_residual_rad <= config.direction_tolerance_rad)
+              and np.all(saved.position_residual_m <= config.position_tolerance_m)
               and np.all(saved.orientation_residual_rad <= config.orientation_tolerance_rad))
         _require(saved.disposition is (Disposition.GEOMETRICALLY_FEASIBLE if ok else Disposition.RESIDUAL_EXCEEDED),
                  "Retained disposition differs from residuals")
         q_out.append(saved.q.copy())
         p_out.append(saved.position_residual_m.copy())
         r_out.append(saved.orientation_residual_rad.copy())
+        d_out.append(saved.direction_residual_rad.copy())
         iterations.append(saved.iterations)
         dispositions.append(saved.disposition)
     if resume:
@@ -371,31 +431,43 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
         if stop_requested():
             raise RetargetInterrupted(frame, T)
         def residual(q):
-            rows, pe, re = [], [], []
+            rows, pe, re, de = [], [], [], []
             actual = target.poses(q, root_p[frame], root_quat[frame])
-            for mapping, (p, R) in zip(b.profile.landmarks, actual, strict=True):
-                dp = points[mapping.source][frame]-p
-                pe.append(float(np.linalg.norm(dp)))
-                rows.extend(dp * math.sqrt(mapping.weight))
+            for mapping, (p, R) in zip(b.profile.landmarks, actual[:len(b.profile.landmarks)], strict=True):
+                if mapping.position:
+                    dp = points[mapping.source][frame]-p
+                    pe.append(float(np.linalg.norm(dp)))
+                    rows.extend(dp * math.sqrt(mapping.weight))
+                else:
+                    pe.append(0.0)
                 if mapping.orientation:
                     dr = orientation_error(mat_to_quat(R), mat_to_quat(rotations[mapping.source][frame]))
                     re.append(float(np.linalg.norm(dr)))
                     rows.extend(dr * config.orientation_weight * math.sqrt(mapping.weight))
                 else:
                     re.append(0.0)  # No orientation target; profile records that absence.
-            return np.asarray(rows), np.asarray(pe), np.asarray(re)
+            for mapping, (parent, child) in zip(b.profile.directions, target.direction_indices, strict=True):
+                vector = actual[child][0] - actual[parent][0]
+                length = np.linalg.norm(vector)
+                _require(length > 1e-10, "Target direction has coincident endpoints")
+                unit = vector / length
+                desired = desired_directions[mapping.key][frame]
+                de.append(float(np.arccos(np.clip(unit @ desired, -1, 1))))
+                rows.extend((desired-unit) * config.direction_weight * math.sqrt(mapping.weight))
+            return np.asarray(rows), np.asarray(pe), np.asarray(re), np.asarray(de)
         q = seed.copy()
         used = 0
         for used in range(config.max_iterations+1):
-            error, pe, re = residual(q)
-            if (np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad)) or not len(free) or used == config.max_iterations:
+            error, pe, re, de = residual(q)
+            if (np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad) and np.all(de <= config.direction_tolerance_rad)) or not len(free) or used == config.max_iterations:
                 break
             rows = []
             spatial = target.jacobians(q, root_quat[frame])
             actual = target.poses(q, root_p[frame], root_quat[frame])
-            for mapping, full, (_, R) in zip(b.profile.landmarks, spatial, actual, strict=True):
+            for mapping, full, (_, R) in zip(b.profile.landmarks, spatial[:len(b.profile.landmarks)], actual[:len(b.profile.landmarks)], strict=True):
                 weight = math.sqrt(mapping.weight)
-                rows.append(-full[:3, free] * weight)
+                if mapping.position:
+                    rows.append(-full[:3, free] * weight)
                 if mapping.orientation:
                     dr = orientation_error(mat_to_quat(R), mat_to_quat(rotations[mapping.source][frame]))
                     x, y, z = dr
@@ -404,6 +476,13 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
                     coefficient = 1/12 if theta < 1e-5 else (1 - theta/(2*math.tan(theta/2)))/(theta*theta)
                     right_inverse = np.eye(3) + .5*skew + coefficient*skew@skew
                     rows.append(-right_inverse @ full[3:, free] * config.orientation_weight * weight)
+            for mapping, (parent, child) in zip(b.profile.directions, target.direction_indices, strict=True):
+                vector = actual[child][0] - actual[parent][0]
+                length = np.linalg.norm(vector)
+                _require(length > 1e-10, "Target direction has coincident endpoints")
+                unit = vector / length
+                jacobian = (np.eye(3)-np.outer(unit, unit)) / length @ (spatial[child][:3]-spatial[parent][:3])
+                rows.append(-jacobian[:, free] * config.direction_weight * math.sqrt(mapping.weight))
             jac = np.concatenate(rows)
             step = -np.linalg.solve(jac.T @ jac + config.damping**2*np.eye(len(free)), jac.T @ error)
             size = np.linalg.norm(step)
@@ -419,18 +498,20 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
                     break
             if not improved:
                 break
-        _, pe, re = residual(q)  # Measure returned state, never a stale pre-update error.
-        ok = np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad)
+        _, pe, re, de = residual(q)  # Measure returned state, never a stale pre-update error.
+        ok = (np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad)
+              and np.all(de <= config.direction_tolerance_rad))
         dispositions.append(Disposition.GEOMETRICALLY_FEASIBLE if ok else Disposition.RESIDUAL_EXCEEDED)
         q_out.append(q.copy())
         p_out.append(pe)
         r_out.append(re)
+        d_out.append(de)
         iterations.append(used)
         if on_frame is not None:
-            on_frame(RetargetFrame(frame, _readonly(q), _readonly(pe), _readonly(re), used, dispositions[-1]))
+            on_frame(RetargetFrame(frame, _readonly(q), _readonly(pe), _readonly(re), used, dispositions[-1], _readonly(de)))
         seed = q
     return RetargetSequence(b, config, _readonly(root_p), _readonly(root_quat), _readonly(q_out), float(fps),
-                            _readonly(p_out), _readonly(r_out), tuple(iterations), tuple(dispositions))
+                            _readonly(p_out), _readonly(r_out), tuple(iterations), tuple(dispositions), _readonly(d_out))
 
 
 @dataclass(frozen=True)
