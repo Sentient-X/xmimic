@@ -309,6 +309,18 @@ def _unpack_state(archive, directory, expected_binding):
 def train(context) -> Path:
     """GPU job: consume Catalog-admitted feasible motions and preserve complete state."""
     from sx_training.artifacts import ArtifactPurpose
+    # The managed cache volume is isolated to this job and retained on replacement.
+    # JAX is imported by checkpoint codecs; configure it explicitly before compiling.
+    import jax
+    for name, child in (("WARP_CACHE_PATH", "warp"), ("CUDA_CACHE_PATH", "cuda")):
+        path = context.cache_dir / child
+        path.mkdir(parents=True, exist_ok=True)
+        os.environ[name] = str(path)
+    jax_cache = context.cache_dir / "jax"
+    jax_cache.mkdir(parents=True, exist_ok=True)
+    jax.config.update("jax_compilation_cache_dir", str(jax_cache))
+    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     from .single_gpu import run
     if set(context.config) != {'training', 'source_binding', 'embodiment_id'}:
         raise ValueError('GPU program requires training config, source and embodiment bindings')

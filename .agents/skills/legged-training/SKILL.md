@@ -320,3 +320,26 @@ actual managed runtime after two committed frames while its platform checkpoint 
 still step zero, removes the last frame, and observes `ResumeRefusedError`. Together
 with the prior focused suites, 74 tests passed in 7.79 seconds. Hosted Modal volume
 commit visibility remains unverified; native fsync is not a provider commit receipt.
+
+### Body review takes precedence over numerical acceptance (2026-11-08)
+
+The owner rejected the rendered 39-coordinate composite as visibly broken and
+requested human engineering review. The SO-101/ZED head must be replaced by the
+original humanoid head on its original CAD neck seat. Keep training on that body
+on hold. A nominal geometry contract, floor-only contacts, slower reference clock,
+or a passing solver cannot establish that the assembly represents the robot.
+Prepare front/side/three-quarter mesh views and the exact source/derived URDF for
+the engineer; do not advance the body's registry alias or run GPU learning merely
+because the generic workflow tests pass. The original SO-101 candidate, residuals
+and source motion remain retained as diagnostic evidence.
+
+The managed CLI now resolves registered names or portable body documents, verifies
+all retained prepared bytes before reusing them, and shares one SDK-resolved endpoint
+set between Catalog and training. `--profile preview` honors `SX_PREVIEW_ORIGIN` for
+both. A reviewed tampering probe initially passed altered source bytes; a per-file
+closure journal now refuses source, profile and scene changes before paid admission.
+Correction verification passed six focused tests. The whole CPU suite before the
+subsequent quality-projection changes passed 191 tests and 44 subtests. GPU metrics
+are forwarded to nonblocking Waddle logging and retained as final CSV/JSON artifacts;
+JAX, Warp and CUDA caches use the managed job's persistent cache directory. These
+are implementation facts; no hosted GPU training or successful policy is established.
