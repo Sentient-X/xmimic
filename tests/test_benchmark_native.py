@@ -164,4 +164,204 @@ def test_native_paid_child_is_never_reexecuted_after_result_or_failure(
     assert counter.read_text() == "x"
     assert (
         context.run_dir / "native-output/step-000.log"
-    ).read_text() == "native stdout\n"
+    ).read_text() == "Native command stdout/stderr follows\nnative stdout\n"
+
+
+def managed_fixture(tmp_path, monkeypatch, child):
+    import json
+    import sys
+    import tools.benchmark_native as native
+    from sx_contracts import Sha256Digest
+    from sx_training import TrainingContext
+    from sx_training.artifacts import ArtifactFile, ArtifactManifest, ArtifactPurpose
+
+    selected = source(tmp_path, [("script.py", tarfile.REGTYPE, child.encode())])
+    data = tmp_path / "data"
+    (data / "inputs").mkdir(parents=True)
+    archive = data / "inputs/source.tar.gz"
+    archive.write_bytes((tmp_path / "fixture-revision.tar.gz").read_bytes())
+    manifest = ArtifactManifest(
+        ArtifactPurpose.EVALUATION,
+        (
+            ArtifactFile(
+                "source.tar.gz",
+                Sha256Digest(selected.archive_sha256),
+                archive.stat().st_size,
+            ),
+        ),
+        False,
+    )
+    document = {
+        "schema": "sx.trainer/v1",
+        "trainer": {
+            "entrypoint": "tools.benchmark_native:run",
+            "config": {
+                "method": "vanilla_policyik",
+                "phase": "evaluate_single",
+                "seed": 1,
+            },
+        },
+        "inputs": {
+            "job_id": "ftjob_" + "a" * 32,
+            "spec": {
+                "artifact_inputs": {
+                    "manifest_json": manifest.canonical_bytes().decode()
+                },
+            },
+        },
+    }
+    context = TrainingContext(
+        json.dumps(document).encode(),
+        data_root=data,
+        cache_dir=tmp_path / "cache",
+        runs_dir=tmp_path / "runs",
+    )
+    monkeypatch.setattr(native, "SOURCES", (selected,))
+    monkeypatch.setattr(
+        native,
+        "native_commands",
+        lambda method, phase, seed, source, output, interpreter: [
+            (source, [sys.executable, "script.py", str(output)]),
+        ],
+    )
+    return context
+
+
+SUCCESS_CHILD = "from pathlib import Path\nimport sys\nPath(sys.argv[1],'result').write_text('success')\n"
+
+
+def test_real_owner_execute_accepts_atomic_native_artifact_and_reentry(
+    tmp_path, monkeypatch
+):
+    from sx_training import execute, verify_receipt
+    from sx_contracts.identity import content_digest
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    artifact = execute(context)
+    assert artifact == context.run_dir / "artifact"
+    assert (artifact / "result").read_text() == "success"
+    verify_receipt(artifact, spec_digest=content_digest(context.inputs["spec"]))
+    assert execute(context) == artifact
+    verify_receipt(artifact, spec_digest=content_digest(context.inputs["spec"]))
+
+
+def test_unrecorded_source_refused_before_child_import(tmp_path, monkeypatch):
+    import tools.benchmark_native as native
+
+    context = managed_fixture(tmp_path, monkeypatch, "import shadow\n" + SUCCESS_CHILD)
+    directory = context.run_dir / "native-source"
+    directory.mkdir()
+    (directory / "shadow.py").write_text("raise RuntimeError('executed unverified')")
+    with pytest.raises(ValueError, match="unrecorded"):
+        native.run(context)
+    assert not (context.run_dir / "native-steps/000.json").exists()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "native-source",
+        "native-output",
+        "native-steps",
+        "artifact",
+        "native-publication",
+    ],
+)
+def test_managed_symlink_destinations_refused_before_writes(
+    tmp_path, monkeypatch, name
+):
+    import tools.benchmark_native as native
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (context.run_dir / name).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="link"):
+        native.run(context)
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["extra", "link", "changed"])
+@pytest.mark.parametrize("directory", ["native-output", "artifact"])
+def test_completed_inventory_cannot_gain_unverified_results(
+    tmp_path, monkeypatch, kind, directory
+):
+    from sx_training import execute
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    execute(context)
+    root = context.run_dir / directory
+    if kind == "link":
+        (root / "extra-score.json").symlink_to(root / "result")
+    elif kind == "extra":
+        (root / "extra-score.json").write_text('{"score":999}')
+    else:
+        (root / "result").write_text("changed")
+    with pytest.raises(ValueError, match="changed|unrecorded|link"):
+        execute(context)
+
+
+def test_stopping_kills_sigterm_ignoring_grandchild_after_leader_exits(
+    tmp_path, monkeypatch
+):
+    import time
+    import psutil
+    import tools.benchmark_native as native
+
+    child = """from pathlib import Path
+import subprocess, sys, time
+p=Path(sys.argv[1])
+g=subprocess.Popen([sys.executable,'-c',"import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"])
+(p/'grandchild.pid').write_text(str(g.pid))
+time.sleep(.2)
+(p/'ready').write_text('yes')
+time.sleep(60)
+"""
+    context = managed_fixture(tmp_path, monkeypatch, child)
+    context._cancelled = lambda: (context.run_dir / "native-output/ready").exists()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        native.run(context)
+    pid = int((context.run_dir / "native-output/grandchild.pid").read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and psutil.pid_exists(pid):
+        if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+            break  # terminated; OS init owns reaping orphaned processes
+        time.sleep(0.05)
+    assert (
+        not psutil.pid_exists(pid)
+        or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    )
+    with pytest.raises(RuntimeError, match="no automatic rerun"):
+        native.run(context)
+
+
+def test_interrupted_artifact_copy_resumes_without_executing_paid_child(
+    tmp_path, monkeypatch
+):
+    from sx_training import execute
+    import tools.benchmark_native as native
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    original = native._write_exact
+    with monkeypatch.context() as interrupted:
+
+        def fail_second_publication(path, payload):
+            if path.parent.name == "native-publication" and path.name == "result":
+                raise OSError("publication interrupted")
+            return original(path, payload)
+
+        interrupted.setattr(native, "_write_exact", fail_second_publication)
+        with pytest.raises(OSError, match="publication interrupted"):
+            execute(context)
+    assert not (context.run_dir / "artifact").exists()
+    journal = (context.run_dir / "native-steps/000.json").read_bytes()
+    monkeypatch.setattr(
+        native.subprocess
+        if hasattr(native, "subprocess")
+        else __import__("subprocess"),
+        "Popen",
+        lambda *a, **k: pytest.fail("paid work restarted"),
+    )
+    artifact = execute(context)
+    assert (artifact / "result").read_text() == "success"
+    assert (context.run_dir / "native-steps/000.json").read_bytes() == journal

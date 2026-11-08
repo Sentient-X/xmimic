@@ -366,16 +366,110 @@ def require_purpose(method, phase, manifest):
         raise ValueError("Native evaluation requires EVALUATION and false eligibility")
 
 
-def run(context):
-    """Managed native-control consumer. No Catalog/provider credentials or launch API.
+def _regular_tree(root):
+    """Reject aliases/special files before reading or writing retained custody."""
+    import stat
 
-    Every child command starts once. Completed native steps can continue; an interrupted
-    child has no upstream optimizer/simulator recovery and refuses automatic re-execution.
-    The managed run volume retains its stdout, checkpoints and partial output for diagnosis.
-    """
+    root = Path(root)
+    for parent in (root, *root.parents):
+        if parent.is_symlink():
+            raise ValueError("Native managed path contains a link")
+    if not root.exists():
+        return {}
+    if not root.is_dir():
+        raise ValueError("Native managed root is not a directory")
+    files = {}
+    for path in root.rglob("*"):
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            raise ValueError("Native managed tree contains a link or special file")
+        files[path.relative_to(root).as_posix()] = digest(path)
+    return files
+
+
+def _write_exact(path, payload):
     import os
-    import shutil
+    import tempfile
+
+    path = Path(path)
+    for parent in (path, *path.parents):
+        if parent.is_symlink():
+            raise ValueError("Native managed path contains a link")
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != payload:
+            raise ValueError("Native retained bytes changed")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=".native-write-", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.link(temporary, path)
+    temporary.unlink()
+
+
+def _terminate_group(child):
+    """Leader exit does not acknowledge termination of its remaining children."""
+    import os
     import signal
+    import time
+
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    child.wait()
+
+
+def _publish_native(context, output):
+    """Atomically expose exact completed bytes at the owner's required artifact root."""
+    import os
+
+    expected = _regular_tree(output)
+    artifact = context.run_dir / "artifact"
+    current = _regular_tree(artifact)
+    # Only the owner execute() receipt is outside authored output identity.
+    from sx_training import RECEIPT
+
+    current.pop(RECEIPT, None)
+    current.pop(f".{RECEIPT}.partial", None)
+    if artifact.exists():
+        if current != expected:
+            raise ValueError("Native published output changed")
+        return artifact
+    staging = context.run_dir / "native-publication"
+    retained = _regular_tree(staging)
+    if any(expected.get(name) != sha for name, sha in retained.items()):
+        raise ValueError("Native publication staging changed")
+    staging.mkdir(exist_ok=True)
+    for name in expected:
+        _write_exact(staging / name, (output / name).read_bytes())
+    if _regular_tree(staging) != expected:
+        raise ValueError("Native publication inventory differs")
+    os.rename(staging, artifact)
+    return artifact
+
+
+def run(context):
+    """Execute native steps once, retaining ambiguous paid work without rerunning it."""
+    import os
     import subprocess
     import time
 
@@ -389,37 +483,45 @@ def run(context):
     if digest(archive) != selected.archive_sha256:
         raise ValueError("Native source differs from the pinned unmodified control")
     source = context.run_dir / "native-source"
-    source.mkdir(exist_ok=True)
-    for name, payload in archived_files(archive, selected.directory).items():
-        path = source / name
-        if any(p.is_symlink() for p in (path, *path.parents)):
-            raise ValueError("Native source may not contain links")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.read_bytes() != payload:
-            raise ValueError("Native source was modified")
-        if not path.exists():
-            path.write_bytes(payload)
-    # Native XMimic assets are separate immutable governed inputs, verified against
-    # upstream's published manifest before any simulator or optimizer is imported.
+    output = context.run_dir / "native-output"
+    records = context.run_dir / "native-steps"
+    # Check all writable destinations before any source copying or child execution.
+    for directory in (
+        source,
+        output,
+        records,
+        context.run_dir / "artifact",
+        context.run_dir / "native-publication",
+    ):
+        _regular_tree(directory)
+    payloads = archived_files(archive, selected.directory)
     if method is NativeMethod.XMIMIC:
-        for row in (source / "tools/data_sha256.txt").read_text().splitlines():
+        for row in payloads["tools/data_sha256.txt"].decode().splitlines():
             expected, name = row.split(maxsplit=1)
             name = name.lstrip(" *")
+            path = PurePosixPath(name)
+            if path.is_absolute() or ".." in path.parts or str(path) != name:
+                raise ValueError("Unsafe upstream native asset path")
             item = context.artifacts["task/" + name]
             if digest(item) != expected:
                 raise ValueError(
                     "Native G1/LAFAN asset differs from published baseline"
                 )
-            destination = source / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and digest(destination) != expected:
-                raise ValueError("Retained native task asset changed")
-            if not destination.exists():
-                shutil.copyfile(item, destination)
-    output = context.run_dir / "native-output"
+            payloads[name] = item.read_bytes()
+    expected_source = {
+        name: hashlib.sha256(value).hexdigest() for name, value in payloads.items()
+    }
+    retained_source = _regular_tree(source)
+    if any(expected_source.get(name) != sha for name, sha in retained_source.items()):
+        raise ValueError("Native source has modified or unrecorded files")
+    source.mkdir(exist_ok=True)
+    for name, payload in payloads.items():
+        _write_exact(source / name, payload)
+    if _regular_tree(source) != expected_source:
+        raise ValueError("Native source inventory differs")
     output.mkdir(exist_ok=True)
+    initial = {}
     if method is NativeMethod.XMIMIC and phase is not NativePhase.TRAIN:
-        # Checkpoints come from an independently admitted prior native TRAINING Job.
         checkpoints = [
             (name, path)
             for name, path in context.artifacts.items()
@@ -431,13 +533,14 @@ def run(context):
             )
         for name, path in checkpoints:
             filename = PurePosixPath(name).name
-            if not filename.startswith("ckpt_") or not filename.endswith(".npz"):
+            if (
+                name != "checkpoints/" + filename
+                or not filename.startswith("ckpt_")
+                or not filename.endswith(".npz")
+            ):
                 raise ValueError("Unexpected native checkpoint member")
-            destination = output / filename
-            if destination.exists() and digest(destination) != digest(path):
-                raise ValueError("Retained native checkpoint changed")
-            if not destination.exists():
-                shutil.copyfile(path, destination)
+            _write_exact(output / filename, path.read_bytes())
+            initial[filename] = digest(path)
     interpreter = (
         "/opt/policyik/.venv/bin/python"
         if method is NativeMethod.POLICYIK
@@ -456,8 +559,14 @@ def run(context):
     else:
         env["PYTHONPATH"] = str(source)
         env["JAX_COMPILATION_CACHE_DIR"] = str(context.cache_dir / "native-jax")
-    records = context.run_dir / "native-steps"
     records.mkdir(exist_ok=True)
+    record_files = _regular_tree(records)
+    allowed_records = {f"{number:03d}.json" for number in range(len(commands))}
+    if not record_files.keys() <= allowed_records:
+        raise ValueError("Native journal contains unrecorded files")
+    completed = []
+    expected_output = initial
+    pending_seen = False
     for number, (cwd, command) in enumerate(commands):
         receipt = records / f"{number:03d}.json"
         intent = {
@@ -465,28 +574,44 @@ def run(context):
             "cwd": str(cwd),
             "source": selected.archive_sha256,
         }
-        if receipt.exists():
-            retained = json.loads(receipt.read_bytes())
-            if retained["intent"] != intent:
-                raise ValueError("Native command identity changed")
-            if retained["state"] != "complete":
-                raise RuntimeError(
-                    "Native paid command interrupted or ambiguous; no automatic rerun"
-                )
-            for name, expected in retained["files"].items():
-                if digest(output / name) != expected:
-                    raise ValueError("Native completed output changed")
+        if not receipt.exists():
+            pending_seen = True
             continue
+        retained = json.loads(receipt.read_bytes())
+        if pending_seen or retained["intent"] != intent:
+            raise ValueError("Native command identity or order changed")
+        if retained["state"] != "complete":
+            raise RuntimeError(
+                "Native paid command interrupted or ambiguous; no automatic rerun"
+            )
+        if any(
+            retained["files"].get(name) != sha for name, sha in expected_output.items()
+        ):
+            raise ValueError("Native step rewrote previously completed output")
+        expected_output = retained["files"]
+        completed.append(retained)
+    actual = _regular_tree(output)
+    provenance = actual.pop("native-provenance.json", None)
+    if actual != expected_output:
+        raise ValueError("Native completed output changed or contains unrecorded files")
+    if provenance is not None and len(completed) != len(commands):
+        raise ValueError("Native provenance exists before completion")
+    for number in range(len(completed), len(commands)):
+        cwd, command = commands[number]
+        receipt = records / f"{number:03d}.json"
+        intent = {
+            "command": command,
+            "cwd": str(cwd),
+            "source": selected.archive_sha256,
+        }
         if context.stopping:
             raise RuntimeError("Native execution stopped before a new child command")
-        # Exclusive intent is retained before paid child work. No retry overwrites it.
-        with receipt.open("xb") as stream:
-            stream.write(
-                canonical_json({"intent": intent, "state": "started"}).encode()
-            )
-            stream.flush()
-            os.fsync(stream.fileno())
+        _write_exact(
+            receipt, canonical_json({"intent": intent, "state": "started"}).encode()
+        )
         with (output / f"step-{number:03d}.log").open("xb") as log:
+            log.write(b"Native command stdout/stderr follows\n")
+            log.flush()
             child = subprocess.Popen(
                 command,
                 cwd=cwd,
@@ -495,39 +620,39 @@ def run(context):
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            while child.poll() is None:
+            try:
+                while child.poll() is None:
+                    if context.stopping:
+                        raise RuntimeError(
+                            "Native paid child interrupted; partial evidence retained"
+                        )
+                    time.sleep(0.2)
                 if context.stopping:
-                    os.killpg(child.pid, signal.SIGTERM)
-                    try:
-                        child.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL)
-                        child.wait()
                     raise RuntimeError(
                         "Native paid child interrupted; partial evidence retained"
                     )
-                time.sleep(0.2)
-            if child.returncode:
-                raise RuntimeError(
-                    f"Native command failed with exit{child.returncode}; evidence retained"
-                )
-        files = {
-            p.relative_to(output).as_posix(): digest(p)
-            for p in output.rglob("*")
-            if p.is_file()
-        }
+                if child.returncode:
+                    raise RuntimeError(
+                        f"Native command failed with exit{child.returncode}; evidence retained"
+                    )
+            finally:
+                # Always account for descendants even when the leader exited first.
+                _terminate_group(child)
+            log.flush()
+            os.fsync(log.fileno())
+        files = _regular_tree(output)
+        if any(files.get(name) != sha for name, sha in expected_output.items()):
+            raise ValueError("Native step rewrote previously completed output")
+        if _regular_tree(source) != expected_source:
+            raise ValueError("Native command changed immutable source")
+        record = {"intent": intent, "state": "complete", "files": files}
         temporary = receipt.with_suffix(".complete")
-        with temporary.open("xb") as stream:
-            stream.write(
-                canonical_json(
-                    {"intent": intent, "state": "complete", "files": files}
-                ).encode()
-            )
-            stream.flush()
-            os.fsync(stream.fileno())
+        _write_exact(temporary, canonical_json(record).encode())
         os.replace(temporary, receipt)
-    # Output directory is separately managed; never modify verified input sources.
-    (output / "native-provenance.json").write_text(
+        expected_output = files
+        completed.append(record)
+    _write_exact(
+        output / "native-provenance.json",
         canonical_json(
             {
                 "method": method.value,
@@ -536,11 +661,9 @@ def run(context):
                 "repository": selected.repository,
                 "revision": selected.revision,
                 "source_sha256": selected.archive_sha256,
-                "steps": [
-                    json.loads(p.read_bytes()) for p in sorted(records.glob("*.json"))
-                ],
+                "steps": completed,
                 "scope": "Native upstream task; not a matched stationary adaptation or physical qualification",
             }
-        )
+        ).encode(),
     )
-    return output
+    return _publish_native(context, output)
