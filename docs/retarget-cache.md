@@ -44,7 +44,9 @@ Only that reference may settle the clip. `retarget_clip` creates a bound frame j
 before the solver starts, so the same execution can resume its committed prefix under
 the cache lock. The last frame's exact coordinates warm-start the next frame; rejected
 frames retain their diagnostics and count as committed progress too. Each complete
-frame is fsynced before the next frame begins. A kill during an unfinished frame may
+frame and its separate count/hash tip are fsynced before the next frame begins. A
+missing committed tail is refused even when the platform checkpoint is older. A
+complete frame ahead of an interrupted tip write is verified and adopted. A kill during an unfinished frame may
 repeat that uncommitted frame, but acknowledged frames are never solved again.
 
 Legacy running entries without a frame journal still require reconciliation; there is

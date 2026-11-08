@@ -309,3 +309,14 @@ Preconditions: same admitted source/body/recipe/code, same execution reference, 
 same retained run volume. Stop on a changed binding, corrupt chain, missing acknowledged
 frame or legacy running state without a journal. A kill inside a frame can repeat only
 that uncommitted frame. These tests do not establish hosted Modal commit visibility.
+
+
+The independent CPU review found that a missing final frame could look like a shorter
+valid prefix when progress was inferred only from filenames. The corrected journal
+fsyncs a separate count/hash tip after every frame, before acknowledging it. Restart
+refuses a tip whose tail is missing; a complete frame ahead of an interrupted tip write
+is verified and adopted without solving it again. The exact negative test kills the
+actual managed runtime after two committed frames while its platform checkpoint is
+still step zero, removes the last frame, and observes `ResumeRefusedError`. Together
+with the prior focused suites, 74 tests passed in 7.79 seconds. Hosted Modal volume
+commit visibility remains unverified; native fsync is not a provider commit receipt.

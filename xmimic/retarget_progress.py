@@ -45,6 +45,19 @@ class FrameJournal:
         self._previous = content_hash(header)
         self._digests = [self._previous]
         self._frames: list[RetargetFrame] = []
+        tip_path = path/'tip.json'
+        if not tip_path.exists():
+            _require(create and not list(path.glob('frame-*.json')),
+                     'Retarget progress lost its durable tip; refuse rollback')
+            self._write_tip()
+        tip_envelope = _read(tip_path)
+        _require(set(tip_envelope) == {'sha256', 'tip'}, 'Malformed progress tip')
+        tip = tip_envelope['tip']
+        _require(isinstance(tip, dict) and set(tip) == {'binding_sha256', 'completed', 'prefix_sha256'}
+                 and content_hash(tip) == tip_envelope['sha256']
+                 and tip['binding_sha256'] == self._digests[0]
+                 and type(tip['completed']) is int and 0 <= tip['completed'] <= total_frames,
+                 'Retarget progress tip is corrupt or belongs to another binding')
         for index, item in enumerate(sorted(path.glob('frame-*.json'))):
             _require(item.name == self._filename(index), 'Retarget progress has a missing or invalid frame')
             envelope = _read(item)
@@ -56,6 +69,19 @@ class FrameJournal:
             self._previous = envelope['sha256']
             self._digests.append(self._previous)
         _require(len(self._frames) <= total_frames, 'Retained progress exceeds sequence')
+        _require(tip['completed'] <= len(self._frames),
+                 'Retarget progress lost a committed tail frame; refuse rollback')
+        _require(self._digests[tip['completed']] == tip['prefix_sha256'], 'Retarget tip prefix digest differs')
+        if tip['completed'] < len(self._frames):
+            # A crash after the immutable frame but before its tip retained valid
+            # work. Finish that commit before acknowledging the recovered prefix.
+            self._write_tip()
+
+    def _write_tip(self) -> None:
+        self._assert_active()
+        tip = {'binding_sha256': self._digests[0], 'completed': len(self._frames),
+               'prefix_sha256': self._previous}
+        _atomic(self.path/'tip.json', _json({'sha256': content_hash(tip), 'tip': tip}))
 
     @staticmethod
     def _filename(index: int) -> str:
@@ -109,6 +135,7 @@ class FrameJournal:
         self._frames.append(parsed)
         self._previous = digest
         self._digests.append(digest)
+        self._write_tip()  # No callback acknowledges a frame before its durable count/hash.
 
     def checkpoint_receipt(self) -> dict:
         """Opaque managed checkpoint binds an acknowledged prefix on the run volume."""

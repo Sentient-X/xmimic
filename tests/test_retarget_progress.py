@@ -186,3 +186,62 @@ def test_managed_runtime_refuses_missing_acknowledged_native_state(tmp_path, mon
                         lambda *a, **k: pytest.fail('missing paid progress must never restart'))
     with pytest.raises(ResumeRefusedError):
         execute(reenter(context))
+
+
+def test_committed_tail_loss_refuses_even_before_first_periodic_platform_checkpoint(tmp_path, monkeypatch):
+    from sx_training import ResumeRefusedError, execute, execution_bytes
+    from test_managed_worker import context_fixture
+    context = context_fixture(tmp_path, monkeypatch)
+    document = tmp_path/'invocation.json'
+    document.write_bytes(execution_bytes(context.inputs, context.trainer))
+    program = '''
+import os,sys
+from pathlib import Path
+from sx_training import TrainingContext, execute
+from xmimic.retarget_progress import FrameJournal
+context = TrainingContext(Path(sys.argv[1]).read_bytes(), data_root=Path(sys.argv[2]),
+                          cache_dir=Path(sys.argv[3]), runs_dir=Path(sys.argv[4]))
+append = FrameJournal.append
+def kill_after_two(self,frame):
+    append(self,frame)
+    if frame.index == 1:
+        os._exit(43)
+FrameJournal.append = kill_after_two
+execute(context)
+'''
+    killed = subprocess.run([sys.executable, '-c', program, str(document), str(context.data_root),
+                             str(context.cache_dir), str(context.run_dir.parent)],
+                            env={**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)},
+                            capture_output=True, text=True, timeout=30)
+    assert killed.returncode == 43, killed.stderr
+    assert [p.name for p in context.run_dir.glob('checkpoint*.pt')] == ['checkpoint_000000000000.pt']
+    journal, = list((context.run_dir/'xmimic/retarget-cache').glob('*/progress-*'))
+    assert json.loads((journal/'tip.json').read_bytes())['tip']['completed'] == 2
+    (journal/'frame-000000001.json').rename(journal/'missing-tail-for-test')
+    monkeypatch.setattr('xmimic.retarget_workflow.solve_sequence',
+                        lambda *a, **k: pytest.fail('lost committed tail must never rerun'))
+    with pytest.raises(ResumeRefusedError, match='committed tail'):
+        execute(reenter(context))
+
+
+def test_frame_committed_before_tip_failure_is_recovered_without_recompute(tmp_path, monkeypatch):
+    from xmimic.retarget_progress import FrameJournal
+    original_tip = FrameJournal._write_tip
+    def fail_second_tip(self):
+        if len(self.frames) == 2:
+            raise InterruptedError('frame committed; tip not yet acknowledged')
+        original_tip(self)
+    with monkeypatch.context() as patch:
+        patch.setattr(FrameJournal, '_write_tip', fail_second_tip)
+        with pytest.raises(InterruptedError):
+            run(tmp_path/'run', patch)
+    journal, = list((tmp_path/'run/cache').glob('*/progress-*'))
+    assert len(list(journal.glob('frame-*.json'))) == 2
+    assert json.loads((journal/'tip.json').read_bytes())['tip']['completed'] == 1
+    original_poses = PreparedTarget.poses
+    def forbid_repeat(self, q, root_p, root_quat):
+        assert root_p[0] >= .12 - 1e-12
+        return original_poses(self, q, root_p, root_quat)
+    monkeypatch.setattr(PreparedTarget, 'poses', forbid_repeat)
+    assert run(tmp_path/'run', monkeypatch).disposition.value == 'succeeded'
+    assert json.loads((journal/'tip.json').read_bytes())['tip']['completed'] == 8
