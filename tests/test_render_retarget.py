@@ -148,7 +148,10 @@ def test_site_overlay_uses_canonical_offsets_rotated_with_owning_link(
                 Pose((0.2, 0.3, 0.0), (0.0, 0.0, 0.5)),
             ),
             BodySite(
-                "elbow_pivot", ComponentId("arm"), "b", Pose((0.1, -0.2, 0.0), (0.0, 0.0, 0.0))
+                "elbow_pivot",
+                ComponentId("arm"),
+                "b",
+                Pose((0.1, -0.2, 0.0), (0.0, 0.0, 0.0)),
             ),
         ),
     )
@@ -189,3 +192,73 @@ def test_site_overlay_uses_canonical_offsets_rotated_with_owning_link(
     np.testing.assert_allclose(
         target_point_position(data, pairs[0][3]), [1.2, 3.1, 3], atol=1e-12
     )
+
+
+def test_direction_diagnostics_include_unsampled_middle_frames(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import mujoco
+    from sx_contracts import ComponentId
+    from sx_embodiments.sites import BodySite
+    from sx_embodiments.assembly import Pose
+    from test_retarget_target import fixture_body
+    from tools.render_retarget import raw_direction_diagnostics, segment_indices
+    from xmimic.retarget_target import Direction, TargetKind, TargetProfile
+
+    body = replace(
+        fixture_body(tmp_path, monkeypatch),
+        sites=(
+            BodySite("origin", ComponentId("arm"), "a"),
+            BodySite("material_tip", ComponentId("arm"), "a", Pose((0.4, 0.0, 0.0))),
+        ),
+    )
+    model = mujoco.MjModel.from_xml_string("""<mujoco><worldbody>
+      <body name="base"><freejoint/><geom type="sphere" size=".1"/>
+        <body name="a"><joint axis="0 0 1"/><geom type="sphere" size=".1"/></body>
+      </body></worldbody></mujoco>""")
+
+    class Clip:
+        world_positions = np.array([[[0.0, 0.0, 0.0], [0.4, 0.0, 0.0]]] * 3)
+
+        def joint_index(self, name):
+            return {"sensor": 0, "ray": 1}[name]
+
+    profile = TargetProfile(
+        (),
+        directions=(
+            Direction("sensor", "ray", "origin", "material_tip", kind=TargetKind.SITE),
+        ),
+    )
+    clip = Clip()
+    metrics = raw_direction_diagnostics(
+        profile,
+        clip,
+        segment_indices(profile, clip, model, body),
+        model,
+        {"free_qpos_adr": 0, "qpos_adr": np.array([7])},
+        np.zeros((3, 3)),
+        np.array([[1.0, 0.0, 0.0, 0.0]] * 3),
+        np.array([[0.0], [np.pi / 2], [0.0]]),
+    )
+    assert display_indices(3, 30, 1).tolist() == [0, 2]
+    np.testing.assert_allclose(
+        metrics["sensor->ray"]["angular_deg"], [0, 90, 0], atol=1e-10
+    )
+    np.testing.assert_allclose(
+        metrics["sensor->ray"]["projected_heading_error_deg"], [0, 90, 0], atol=1e-10
+    )
+
+
+def test_heading_projection_is_gravity_relative_and_reports_undefined():
+    from tools.render_retarget import direction_errors
+
+    angular, heading = direction_errors(
+        [1, 1, 0], [1, -1, 0], np.array([0.0, 1.0, 0.0])
+    )
+    assert angular == pytest.approx(90) and heading == pytest.approx(0)
+    angular, heading = direction_errors([0, 0, 1], [1, 0, 0], np.array([0.0, 0.0, 1.0]))
+    assert angular == pytest.approx(90) and heading is None
+    assert direction_errors([0, 0, 0], [1, 0, 0], np.array([0.0, 0.0, 1.0])) == (
+        None,
+        None,
+    )
+    assert direction_errors([1, 0, 0], [0, 1, 0], None) == (90.0, None)

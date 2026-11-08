@@ -168,6 +168,69 @@ def target_point_position(data, point):
     return data.xpos[body_id] + data.xmat[body_id].reshape(3, 3) @ offset
 
 
+def set_candidate_frame(model, data, meta, positions, quats, q, frame):
+    address = meta["free_qpos_adr"]
+    data.qpos[address : address + 3] = positions[frame]
+    data.qpos[address + 3 : address + 7] = quats[frame]
+    data.qpos[meta["qpos_adr"]] = q[frame]
+    mujoco.mj_kinematics(model, data)
+
+
+def direction_errors(source, target, up):
+    """Unsigned raw angular/heading differences; a vertical heading is undefined."""
+    source, target = np.asarray(source, dtype=float), np.asarray(target, dtype=float)
+    if not np.isfinite(source).all() or not np.isfinite(target).all():
+        raise ValueError("Direction diagnostics require finite geometry")
+
+    def angle(a, b):
+        lengths = np.linalg.norm(a), np.linalg.norm(b)
+        if min(lengths) <= 1e-10:
+            return None
+        return math.degrees(
+            math.acos(float(np.clip((a / lengths[0]) @ (b / lengths[1]), -1, 1)))
+        )
+
+    angular = angle(source, target)
+    heading = (
+        None
+        if up is None
+        else angle(source - (source @ up) * up, target - (target @ up) * up)
+    )
+    return angular, heading
+
+
+def raw_direction_diagnostics(
+    profile, clip, segments, model, meta, positions, quats, q
+):
+    """Audit every candidate frame against observed pairs, without recipe offsets."""
+    pairs = [
+        (direction, segment)
+        for direction, segment in zip(profile.directions, segments, strict=True)
+    ]
+    result = {
+        direction.key: {"angular_deg": [], "projected_heading_error_deg": []}
+        for direction, _ in pairs
+    }
+    if not pairs:
+        return result
+    gravity = np.asarray(model.opt.gravity)
+    up = -gravity / np.linalg.norm(gravity) if np.linalg.norm(gravity) > 1e-10 else None
+    data = mujoco.MjData(model)
+    for frame in range(len(q)):
+        set_candidate_frame(model, data, meta, positions, quats, q, frame)
+        for direction, (parent, child, start, end) in pairs:
+            source = (
+                clip.world_positions[frame, child] - clip.world_positions[frame, parent]
+            )
+            target = target_point_position(data, end) - target_point_position(
+                data, start
+            )
+            angular, heading = direction_errors(source, target, up)
+            result[direction.key]["angular_deg"].append(angular)
+            result[direction.key]["projected_heading_error_deg"].append(heading)
+    return result
+
+
 def add_geom(scene, kind, position, size, color, *, end=None):
     if scene.ngeom >= scene.maxgeom:
         raise ValueError("Diagnostic scene exceeded its geometry capacity")
@@ -242,6 +305,9 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
         if str(body.id) != body_id:
             raise ValueError("Site geometry body differs from the retained candidate")
     segments = segment_indices(recipe.target, clip, model, body)
+    direction_metrics = raw_direction_diagnostics(
+        recipe.target, clip, segments, model, meta, positions, quats, q
+    )
     quality = report.get("nominal_quality_result")
     quality_label = (
         "not assessed"
@@ -323,14 +389,7 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
     )
     try:
         for number, frame in enumerate(sample_indices):
-            robot_data.qpos[meta["free_qpos_adr"] : meta["free_qpos_adr"] + 3] = (
-                positions[frame]
-            )
-            robot_data.qpos[meta["free_qpos_adr"] + 3 : meta["free_qpos_adr"] + 7] = (
-                quats[frame]
-            )
-            robot_data.qpos[meta["qpos_adr"]] = q[frame]
-            mujoco.mj_kinematics(model, robot_data)
+            set_candidate_frame(model, robot_data, meta, positions, quats, q, frame)
             mujoco.mj_camlight(model, robot_data)
             camera.lookat[:] = [*positions[frame, :2], 0.65]
             camera.distance = 2.25
@@ -528,6 +587,9 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
         "trained_policy": False,
         "quality_acceptance": quality_label,
         "direction_order": list(metrics.direction_keys),
+        "raw_direction_metrics": direction_metrics,
+        "raw_direction_metrics_scope": "all source frames; actual target point-pairs versus observed source pairs; no recipe offsets; unsigned degrees; null when direction or gravity-plane heading is undefined",
+        "gravity_m_s2": np.asarray(model.opt.gravity).tolist(),
         "direction_tolerance_rad": recipe.solver.direction_tolerance_rad,
         "orientation_tolerance_rad": recipe.solver.orientation_tolerance_rad,
         "geometry_goals_met_frames": int(metrics.goals_met.sum()),
