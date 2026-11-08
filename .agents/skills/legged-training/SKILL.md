@@ -820,3 +820,92 @@ robot trajectories can establish baselines while correspondence is unresolved. N
 paid training, new tolerance acceptance or physical motion was performed by writing
 this plan. Stop short of claiming benchmark enforcement until the evaluator executes
 the frozen protocol and retains its complete results.
+
+### Execute stationary pose/aperture comparisons and native controls
+
+The owner explicitly requested the runner and real baseline execution on2026-11-08.
+Use [stationary results/commands](../../../docs/stationary-benchmark-results.md),
+[the experimental contract](../../../docs/urr-controller-benchmarks.md) and
+[native protocols](../../../docs/native-baselines.md). CPU adaptations and native
+reproductions are separately labelled. A completed pilot is not converged training.
+
+Owner83f32c4 adds fixed-base, prismatic and explicit affine-dependent projection to
+the existing exporter. Dual PiPER fixture0c19cd156a9e6010a40cc5d6ba24755351ac43cb6893c785bf80d5a3b097df48
+uses12arm coordinates and2metric gripper drives, plus2source mimic followers.
+Hand sites/aperture law come from canonical parts; Y+/-0.35m mounting and PD settings
+are explicit nominal assumptions. Sentient aperture is undocumented; ALOHA's native
+slide range/mimic disagrees with its URDF. Exclude those unsupported aperture cases
+rather than inventing facts. Conservative PiPER native limit rounding is a subset
+of source bounds; export the native subset, refuse extensions. Owner15tests,
+strictPyright0errors and the real all-link FK/aperture test pass. Constant PD shows
+16.029mm/3.338degree gravity sag; exact geometric FK still agrees to1.6e-16m.
+
+First complete scalar screening:13cells,3seeds for each learned method,20updates
+of128real transitions per seed,8common evaluation goals,5s/goal and final1s continuous
+holding. Both hands must satisfy1mm/0.2degree and both apertures1mm. DLS held8/8;
+all learned adaptations0/24 each. PrecisionPPO had19/24 and combined14/24 recorded
+constraint-failure tasks. Total166.78sCPU. This rejects promotion of that pilot;
+it does not prove the research combination cannot converge. Retain old source,
+checkpoints and measured native states before every correction. The measured replay
+uses visual group1, not collision group0; targets display URR frames rather than
+invented target joints. Aperture readings are owner-law-derived proprioceptive
+values, not independent external jaw metrology or grasp-success evidence.
+
+Whole-observation WM prediction gave a network authority over known goals/error
+channels. Structured revision3f3e089 learns q/qd only, deriving commands, FK, aperture,
+precision and history. Extend existing Kinematics (hinge/slide/affine-dependent,
+anchors/reference offsets), never create another embodiment-specific FK. Legacy
+metadata outputs remain bitwise equal. Actual PiPER reconstruction discrepancy
+<=2.21e-6, aperture<=5.6e-9m, discarded known-channel gradients0. Existing rotation
+log gained optional safe_zero handling; default vanilla arithmetic is unchanged.
+Moving structured training refuses missing trajectory state; moving feedback eval
+has separate timing criteria. Evaluation seeds0–7 are development evaluation;
+10000–10063 are reserved for final confirmation before tuning.
+
+Scalar collection548transitions/s was the next measured blocker. Revision7e1e34a
+shares immutable MjModel with separate MjData/RNG/goals per lane and a bounded8-thread
+physics pool; batched known observation/reward math yielded16,102transitions/s
+(29.38x), warnings0. Complete10-update64x32 training measured3,507/sPPO and2,199/s
+combinedWM, including JIT, optimizer updates and durable checkpoints. Collection-only
+speed is not full training throughput. T-by-N GAE handles each lane's terminal before
+flattening; replay/step counts includeN. Complete integration/RNG/command/goal/reset
+state resumes exactly.27focused tests pass. `LearningConfig(num_envs=64)` is an
+execution parameter; fixed bodies/simulator semantics and task thresholds stay equal.
+
+```bash
+python tools/benchmark_urr_vector.py --prepared PREPARED --output NEW.json --num-envs 64 --steps 128
+python tools/benchmark_urr.py --prepared PREPARED --output NEW_RUN \
+  --methods dls ppo_coarse ppo world_model combined --seeds 0 1 2 \
+  --num-envs 64 --iterations 500 --rollout-steps 32 --episode-steps 250 --hold-steps 50
+python -m pytest -q tests/test_kin_scalar.py tests/test_urr_vector.py \
+  tests/test_urr_benchmark.py tests/test_urr_learning.py tests/test_stationary_benchmark.py
+```
+
+The native worker only runs pinned upstream source/tasks/checkpoints via managed
+Jobs, preserving TRAINING versus EVALUATION(false) purpose. PolicyIK needs its native
+Python3.11/IsaacSim5.1/IsaacLab2.3.2/RTX stack; H100/A100 lack required RT support.
+XMimic native uses H100/CUDA12 and its40checksum-boundG1/LAFAN motions (75files,
+110,153,716bytes), exclusively the native control, never Sentient retargeting.
+Native acquisition/imports/unit tests are not native scores. Real worker validation
+must call actual `TrainingContext.execute` and verify its owner receipt before a
+paid launch; worker must return exactly run_dir/artifact. Publication uses existing
+CatalogPublisher, private EVALUATION/false evidence, verified archive inventories
+and readback; no parallel R2 or Modal launcher.
+
+| Observed failure | Cause | Correction |
+| --- | --- | --- |
+| Returned pose lags current qpos by1.6–1.8mm | mj_step integrates after last position stage | mj_forward before measuring returned state; canonical FK consistency regression |
+| Exact-target precision gradient NaN | Euclidean/SO3 norm undefined derivative at zero | Safe zero subgradient with exact norm values; partial/exact-zero tests |
+| Copied task result silently reused | Task lacked its request/policy identity | Bind/verify per-task request hash, seed and sample count |
+| Tiny unit mechanism autorestes numerically | High damping on tiny fixture inertia | Explicit fixture armature and no-warning assertions; no PiPER gain adjustment |
+| Successful paid child rejected at framework boundary | Returned native-output instead of managed artifact root | Actual owner execute/receipt test plus atomic complete output publication |
+| Cancelled child leaves grandchild | Waiting only for leader exit | Kill/reap entire process group, including SIGTERM-ignoring descendants |
+| Extra source/output or symlink accepted | Incomplete inventories/path validation | Exact declared source/output closure and regular in-root paths |
+| Publication cannot resume after fsync/link fault | Unidentified staging temp blocked strict inventory | Temp identity binds destination+digest; reconcile only known exact bytes; forbid paid child rerun in regression |
+
+Preconditions: immutable body/runtime/task/source pins, true measured-transition
+collection, disjoint train/development/final identities, bounded managed spend.
+Stop on physics warnings, unsupported mobility/joints/aperture law or failed owner
+admission. Do not tune thresholds after seeing scores, admit failed human retargets,
+claim native scores from CPU adaptations, or count cached source acquisition as a
+completed GPU baseline. Update actual native receipts separately when they exist.

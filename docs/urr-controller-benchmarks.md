@@ -1,8 +1,10 @@
 # URR motion control: experiments and acceptance
 
-Status: experimental program, agreed direction on 2026-11-08. This document
-specifies comparisons and acceptance; it is not an implemented benchmark runner,
-a completed experiment, or a qualified controller. No comparative scores exist yet.
+Status: experimental program, agreed direction on 2026-11-08. The stationary CPU
+runner and independent evaluator now execute real physics; an initial three-seed
+screening is complete and rejected for learned-control promotion. Native vanilla
+reproductions and confirmatory qualification remain pending. See the
+[implementation, measured screening and commands](stationary-benchmark-results.md).
 
 ## Outcome
 

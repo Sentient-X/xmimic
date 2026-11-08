@@ -110,6 +110,7 @@ def arguments():
     parser.add_argument("--evaluation-seeds", type=int, nargs="+", default=list(range(8)))
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--rollout-steps", type=int, default=128)
+    parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--episode-steps", type=int, default=100)
     parser.add_argument("--hold-steps", type=int, default=25)
     parser.add_argument("--target-fraction", type=float, default=.08)
@@ -123,7 +124,7 @@ if __name__ == "__main__":
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     result = run(args.prepared, args.output, methods=args.methods, seeds=args.seeds,
                  evaluation_seeds=args.evaluation_seeds,
-                 learning=LearningConfig(iterations=args.iterations, rollout_steps=args.rollout_steps),
+                 learning=LearningConfig(iterations=args.iterations, rollout_steps=args.rollout_steps, num_envs=args.num_envs),
                  task=TaskConfig(episode_steps=args.episode_steps, hold_steps=args.hold_steps,
                                  target_fraction=args.target_fraction, moving=args.moving), native_results=args.native_result)
     print(json.dumps({"complete": result["complete"], "result": str(args.output / "result.json")}), flush=True)
