@@ -273,3 +273,22 @@ def test_direction_jacobian_matches_rotated_root_finite_difference(tmp_path, mon
     numeric = np.column_stack([(unit(q+epsilon*np.eye(3)[i])-unit(q-epsilon*np.eye(3)[i]))/(2*epsilon)
                                for i in range(3)])
     np.testing.assert_allclose(analytic, numeric, atol=1e-9)
+
+
+def test_shared_motion_binding_drives_direction_sites_with_offsets(tmp_path, monkeypatch):
+    from xmimic.retarget_target import Direction
+    body = fixture_body(tmp_path, monkeypatch)
+    body = replace(body, sites=(*body.sites,
+        BodySite('shoulder', ComponentId('arm'), 'base', Pose((.1, .2, 0.), (0., 0., 0.)))))
+    settings = TargetProfile((Landmark('hand', 'tip_site', orientation=True, position=False),),
+        holds=(('q3', .3),), directions=(Direction('shoulder', 'hand', 'shoulder', 'tip_site', kind=TargetKind.SITE),))
+    target = prepare_target(body, settings, expected_embodiment_id=str(body.id))
+    root_p, root_q = np.array([.4, .5, .6]), np.array([1., 0., 0., 0.])
+    actual = target.poses(np.array([.4, .2, .3]), root_p, root_q)
+    parent, child = target.direction_indices[0]
+    np.testing.assert_allclose(actual[parent][0], root_p + [.1, .2, 0.])
+    expected, _ = analytic(.2, .4, 0., root_p)
+    np.testing.assert_allclose(actual[child][0], expected)
+    conflicting = replace(settings, directions=(Direction('shoulder', 'hand', 'tip_site', 'shoulder', kind=TargetKind.SITE),))
+    with pytest.raises(RetargetError, match='Conflicting physical sites'):
+        prepare_target(body, conflicting, expected_embodiment_id=str(body.id))

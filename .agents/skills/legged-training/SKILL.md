@@ -507,3 +507,74 @@ frames to turn a rejected reference into an accepted one.
 The bounded independent review reproduced all 400 physics steps exactly and injected
 a renderer failure: all 401 saved states and the diagnostic report survived. It found
 no remaining issue in this change's input binding, passive holds or evidence claims.
+
+### Use the existing URR boundary; test posture as well as endpoints
+
+The owner rejected the earlier599-frame endpoint-only retarget despite small wrist
+residuals. An independent anatomy audit found a0.38mm wrist error with77degrees of
+forearm-direction error. The old recipe used downstream moving yaw links as fixed
+anchors and omitted elbow/knee posture and chest motion. Never admit that cache from
+its narrow nominal `accepted` field; the private review receipt is
+`nominal-approved-ca3fb7/visual-fidelity-rejection.json`.
+
+Use `sx_actions.urr.Motion` through `xmimic.retarget_motion`, preserving complete source
+poses and explicit role correspondence, and `MotionBinding` for actual owner sites.
+No robot proportions belong in the source Motion. Each timestamp rounds
+`index * Fraction(frame_time_literal) * 1e9` independently; a repeatedly rounded
+period accumulates clock error. Missing orientation must remain missing rather than
+becoming identity. The retained shared source must have identical bytes/ID across
+body or proportion changes. Private source artifacts do not belong in git.
+
+Owner branch `codex/semantic-motion-sites` commit
+`ec1e7fd8248af8ce6ce54ffb2a7ddbc29d9c4ced` adds shoulders through the corrected shared
+arm modules and hips/knees/ankles through the leg modules. The humanoid has16sites;
+new identity is `eb249c00dcff12dc212db1e6122df0ea4f13d57f17fc90d4c4a8855051e036f5`.
+Removing only those8sites recovers exactca3fb7; URDF remains exacte7fd42 and all235
+asset files verified. Do not rewrite previous identities, receipts or hardware acceptance.
+Owner verification: `python -m pytest -q tests/test_sentient_pivot_sites.py
+ tests/test_humanoid_correction.py` →10passed with exact owner and compatible shared
+contracts/geometry packages. Exact owner snapshot and portable closure are retained in
+`data/bones_seed/nominal-approved-ca3fb7/semantic-sites-v1/`.
+
+```bash
+# PYTHONPATH must select the exact owner snapshot; do not sync the shared venv.
+JAX_PLATFORMS=cpu python -m pytest -q tests/test_retarget_motion.py \
+  tests/test_retarget_target.py tests/test_retarget_workflow.py \
+  tests/test_retarget_progress.py tests/test_retarget_quality.py \
+  tests/test_render_retarget.py tests/test_artifact_cache.py
+python -m examples.sentient_nominal --source SOURCE.bvh \
+  --embodiment-document semantic-sites-v1/embodiment.json --output NEW_PROFILE
+```
+
+Observed focused suite:102passed,5skipped. The skips concern the installed
+`sx_training` lacking `artifacts`; they are not hosted recovery proof. Real local
+process-kill tests did verify directional-frame resume with no committed frame solved
+twice. V1 checkpoints retain their bytes and cannot be reused for directional objectives.
+
+| Failure | Established cause | Fix / evidence limit |
+| --- | --- | --- |
+| Accurate wrists, visibly wrong arms | Endpoints do not determine elbow configuration | Fit owner-defined limb directions and retain angular residuals |
+| Missing generic anatomy | Approved body lacked shoulder/leg pivot sites | Add facts in shared owning modules; never infer sites from joint order |
+| Initial feet fight leg directions | Nonneutral source feet calibrated to neutral robot feet | Fit8directions+chest first, then bind hand/foot rotations to fitted world frames |
+| Static calibration stops before convergence | First frame hit60iterations; identical second frame converged after20more | Bound calibration at120iterations, keep the same5degree/.01rad limits; retain the failed attempt |
+| Direction-only nominal projection crashes | Reduction over empty landmark arrays | Represent absent maxima as null; still enforce the direction gate |
+| Direction result turns green from zero endpoint error | Unconstrained positions were interpreted as objectives | Mask them; separately display angular geometry and nominal quality |
+
+Local DLS can remain in an incorrect bend basin with weak direction weights; a planar
+ambiguity test needs explicit direction_weight1.0 while the generic default remains0.2.
+Do not silently widen acceptance tolerances. Entire-clip failures stay retained and
+unadmitted. First-pose calibration is not source cropping, flat-sole evidence, full-clip
+success, policy training or physical qualification. Renderer SITE endpoints include
+owner-defined local offsets transformed through actual MuJoCo link frames.
+
+Complete corrected-calibration run `urr-profile-v3` processed all599frames in193.14s:
+7frames meet geometric goals, maximum direction63.3445degrees, maximum orientation
+52.8958degrees. Direction, orientation and speed checks fail; the candidate is rejected.
+Median direction residual over all segments/frames is3.8571degrees, but that aggregate
+must not hide large forearm failures. Cacheff52de1370648023536bbdd239537c270a684af55a0ebc964536dbd4e150c15b,
+manifestb8d06cfdf17c1093ae01cd983caac01d9a191136cf3f14190f9d932d60935f21.
+Both calibration variants retain identical shared Motion67eae1b41100387589ecb5e24a9d9f4513639c1581637b2e715bbb3c861f45cd.
+The earlier neutral-foot variant passed0frames; its599frames remain separately retained.
+This run establishes shared representation/custody and honest rejection, not solved
+retargeting or training readiness. Next investigation is the constrained solver's remaining
+forearm fit, including limit saturation and orientation tradeoffs, without altering raw labels.

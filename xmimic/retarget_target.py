@@ -14,6 +14,7 @@ from types import MappingProxyType
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from sx_actions.urr import MotionBinding
 from sx_contracts.identity import content_digest
 from sx_embodiments import Embodiment
 from sx_embodiments.assets import AssetFormat
@@ -72,17 +73,19 @@ class Landmark:
 
 @dataclass(frozen=True)
 class Direction:
-    """A source bone direction mapped to two explicit canonical link origins."""
+    """A source bone direction mapped to two explicit canonical sites or links."""
     source_parent: str
     source_child: str
     target_parent: str
     target_child: str
     weight: float = 1.0
+    kind: TargetKind = TargetKind.LINK
 
     def __post_init__(self):
         _require(all(isinstance(n, str) and n.strip() for n in (
             self.source_parent, self.source_child, self.target_parent, self.target_child)),
             "Direction needs explicit source and target endpoints")
+        _require(isinstance(self.kind, TargetKind), "Unknown direction target kind")
         _require(self.source_parent != self.source_child and self.target_parent != self.target_child,
                  "Direction endpoints must differ")
         _require(math.isfinite(self.weight) and self.weight > 0, "Direction weight must be positive")
@@ -217,10 +220,25 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
     for name, value in holds.items():
         i = names.index(name)
         _require(lower[i] <= value <= upper[i], f"{name}: hold outside native bounds")
+    # All semantic correspondence uses the shared URR owner. Repeated endpoints
+    # across pose and direction objectives must agree on the same physical site.
+    semantic_sites = {}
+    def bind(role, site):
+        _require(role not in semantic_sites or semantic_sites[role] == site,
+                 f"Conflicting physical sites for motion role {role}")
+        semantic_sites[role] = site
+    for mapping in profile.landmarks:
+        if mapping.kind is TargetKind.SITE:
+            bind(mapping.source, mapping.target)
+    for mapping in profile.directions:
+        if mapping.kind is TargetKind.SITE:
+            bind(mapping.source_parent, mapping.target_parent)
+            bind(mapping.source_child, mapping.target_child)
+    motion_binding = MotionBinding(body, semantic_sites) if semantic_sites else None
     frames, ancestors = [], set()
     for mapping in profile.landmarks:
         if mapping.kind is TargetKind.SITE:
-            site = body.site(mapping.target)
+            site = body.site(motion_binding.sites[mapping.source])
             link, offset = site.link, from_xyz_rpy(site.pose.xyz, site.pose.rpy)
         else:
             link, offset = mapping.target, tuple(np.eye(4).ravel())
@@ -229,9 +247,15 @@ def prepare_target(body: Embodiment, profile: TargetProfile, *, expected_embodim
     direction_indices = []
     for direction in profile.directions:
         indices = []
-        for link in (direction.target_parent, direction.target_child):
+        for role, endpoint in ((direction.source_parent, direction.target_parent),
+                               (direction.source_child, direction.target_child)):
+            if direction.kind is TargetKind.SITE:
+                site = body.site(motion_binding.sites[role])
+                link, offset = site.link, from_xyz_rpy(site.pose.xyz, site.pose.rpy)
+            else:
+                link, offset = endpoint, tuple(np.eye(4).ravel())
             _require(link in kin.links, f"Unknown direction link {link}")
-            frame = (link, tuple(np.eye(4).ravel()))
+            frame = (link, tuple(offset))
             if frame not in frames:
                 frames.append(frame)
             indices.append(frames.index(frame))

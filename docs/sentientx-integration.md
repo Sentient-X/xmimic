@@ -181,3 +181,49 @@ audit resolves development body
 `a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3`.
 The companion remains draft and unpinned; it was tested against the checkout's
 embodiment baseline, not a reconciled newer `main` or deployed station.
+
+## Shared URR source and physical-site retargeting
+
+The SOMA path now converts complete source observations to the existing
+`sx_actions.urr.Motion`; it does not define another motion schema. The explicit
+source correspondence initially preserves SOMA joint names as roles. Positions,
+rotations, literal-period-derived nanosecond timestamps and the chosen world frame
+remain separate from body proportions and joint fitting. Each retained cache includes
+`source-motion.json` and its shared Motion identity, including rejected candidates.
+Changing robot proportions preserves these source bytes. Requalification carries them
+forward without modifying the original cache.
+
+`MotionBinding` resolves source roles to sites owned by the selected embodiment.
+The Sentient example uses chest, shoulder, elbow, wrist, hip, knee and ankle sites;
+it fits eight limb directions plus chest/hand/foot orientation. Physical sites compose
+with the shared modules. A new body still needs an explicit semantic correspondence,
+frame calibration and supported simulation/control projection. This is not automatic
+anatomy discovery or a claim that every legged embodiment is qualified.
+
+Owner commit `ec1e7fd8248af8ce6ce54ffb2a7ddbc29d9c4ced` adds eight pivot sites, giving
+humanoid identity `eb249c00dcff12dc212db1e6122df0ea4f13d57f17fc90d4c4a8855051e036f5`.
+Its URDF is byte-identical to the approved `ca3fb7` assembly; removing only the new sites
+restores that old identity. This is a new semantic revision, not a new hardware approval.
+The upper-body shoulder sites belong to its shared arm modules, so the static body and
+humanoid inherit the same facts.
+
+The owner rejected the earlier endpoint-only retarget visually on 2026-11-08. Its
+small endpoint residuals missed incorrect limb bends; downstream moving joints were
+also used as fixed anchors, shortening modeled upper arms and thighs. That historical
+cache is retained as a rejected visual diagnostic and remains unadmitted for training.
+A narrow numerical acceptance result is not evidence of faithful motion.
+
+Direction errors now participate in optimization, convergence, frame-journal recovery,
+nominal quality and visualization. Journal v2 retains those errors; explicit v1 reading
+supports only old zero-direction executions. Nominal projection cannot erase a failed
+direction objective. First-pose calibration fits all eight directions before assigning
+hand/foot frame offsets, rather than aligning a demonstrated bent leg to neutral feet.
+This nominal calibration does not establish sole contact, no-slip, collision clearance,
+balance or a trained policy. XMimic still needs derived joint references for its current
+tracker; the unchanged URR source remains available for a future direct task-space
+controller consumer.
+
+Complete-clip validation remains unsuccessful: the corrected-calibration599-frame run
+passed geometric goals on7frames, with maximum limb-direction63.34degrees and
+orientation52.90degrees. It failed direction, orientation and speed checks and retained
+only diagnostic output plus the unchanged URR source. No GPU training was started.
