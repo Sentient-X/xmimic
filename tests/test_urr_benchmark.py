@@ -234,3 +234,19 @@ def test_structured_aperture_uses_declared_owner_relation(tmp_path, monkeypatch,
         error = np.zeros(env.error_dim)
         error[-1] = .00931
         np.testing.assert_allclose(env._precision_gain(error, np), 1.)
+
+    # At an exact aperture target, JAX abs(0) chooses +1, which would push
+    # model-based optimization away from the goal. Require the zero subgradient
+    # for both tracking and global precision shaping, and descent on either side.
+    exact = env.observation()
+    exact[env.error_slice] = 0.
+    exact[-4:] = [1., 0., 0., 0.]
+    for precision in (False, True):
+        env.config = replace(env.config, precision=precision)
+        def reward(error):
+            return env.reward_transition(exact, jnp.asarray(exact).at[env.error_slice].set(error), jnp.zeros(3))
+        gradient = jax.grad(reward)
+        np.testing.assert_array_equal(gradient(jnp.zeros(env.error_dim)), 0.)
+        for sign in (-1., 1.):
+            error = jnp.zeros(env.error_dim).at[-1].set(sign*.0003)
+            assert sign*gradient(error)[-1] < 0.

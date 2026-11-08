@@ -300,7 +300,7 @@ class URRPhysicsEnv:
         ratios = [jnp.max(_safe_norm(pose[..., :3], axis=-1) / self.config.position_tolerance_m, axis=-1),
                   jnp.max(_safe_norm(pose[..., 3:], axis=-1) / self.config.orientation_tolerance_rad, axis=-1)]
         if self.apertures:
-            ratios.append(jnp.max(jnp.abs(error[..., 6 * len(self.roles):]) / self.config.aperture_tolerance_m, axis=-1))
+            ratios.append(jnp.max(_safe_norm(error[..., 6 * len(self.roles):, None]) / self.config.aperture_tolerance_m, axis=-1))
         return jnp.max(jnp.stack(ratios, axis=-1), axis=-1)
 
     def reward_transition(self, previous, following, action):
@@ -320,7 +320,7 @@ class URRPhysicsEnv:
             desired = jnp.stack((first, second, jnp.cross(first, second)), axis=-1)
             reward = reward + policyik_pose_reward(error[..., 6*i:6*i+3], error[..., 6*i+3:6*i+6], desired)
         if self.apertures:
-            gap = jnp.abs(error[..., 6*len(self.roles):])
+            gap = _safe_norm(error[..., 6*len(self.roles):, None])
             reward = reward + jnp.sum(-.2*gap+.1*(1.-jnp.tanh(gap/.1)), axis=-1)
         if self.config.precision:
             rho = self._ratio(error)
