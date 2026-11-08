@@ -42,7 +42,7 @@ class ServoEnvironment:
         return np.array([q, .1*self.data.qvel[0], self.command-q, self.previous, self.goal, self.goal-q], np.float32)
 
     def step(self, action):
-        previous = self.previous
+        previous = self.observation()
         self.previous = float(action[0])
         self.command = float(np.clip(self.command+.05*self.previous, -.9, .9))
         self.data.ctrl[0] = self.command
@@ -50,11 +50,11 @@ class ServoEnvironment:
             mujoco.mj_step(self.model, self.data)
         self.steps += 1
         obs = self.observation()
-        reward = float(self.reward_from_observation(obs, np.array([previous])))
+        reward = float(self.reward_transition(previous, obs, action))
         return obs, reward, self.steps == 11, {}
 
-    def reward_from_observation(self, obs, previous_action):
-        return jnp.exp(-4*obs[..., 5]**2)-.001*jnp.sum((obs[..., 3:4]-previous_action)**2, axis=-1)
+    def reward_transition(self, previous, obs, action):
+        return jnp.exp(-4*obs[..., 5]**2)-.001*jnp.sum((action-previous[..., 3:4])**2, axis=-1)
 
     def project_observation(self, previous, action, predicted):
         # Exact facts for this one-hinge physics fixture, in the same contract as

@@ -63,20 +63,21 @@ def restore_learning(path):
 
 
 @pytest.mark.parametrize('method', ['ppo', 'world_model'])
-def test_batched_real_learning_replay_and_checkpoint_resume(tmp_path, monkeypatch, method):
+@pytest.mark.parametrize('precision', [False, True])
+def test_batched_real_learning_replay_and_checkpoint_resume(tmp_path, monkeypatch, method, precision):
     prepared = prepared_fixture(tmp_path, monkeypatch)
     def factory():
-        return URRPhysicsEnv(prepared, TaskConfig(episode_steps=3, hold_steps=1, accumulate=True))
+        return URRPhysicsEnv(prepared, TaskConfig(episode_steps=3, hold_steps=1, accumulate=True, precision=precision))
     config = LearningConfig(seed=571, num_envs=3, iterations=3, rollout_steps=4, hidden=(8,),
                             ppo_epochs=1, wm_updates=1, batch_size=4, imagination_horizon=2, replay_capacity=16)
-    whole = train(factory, method=method, precision=False, config=config, output=tmp_path/'whole')
+    whole = train(factory, method=method, precision=precision, config=config, output=tmp_path/'whole')
     calls = 0
     def stop():
         nonlocal calls
         calls += 1
         return calls == 3
-    interrupted = train(factory, method=method, precision=False, config=config, output=tmp_path/'continue', stop_requested=stop)
-    continued = train(factory, method=method, precision=False, config=config, output=tmp_path/'continue', resume_from=interrupted.checkpoint)
+    interrupted = train(factory, method=method, precision=precision, config=config, output=tmp_path/'continue', stop_requested=stop)
+    continued = train(factory, method=method, precision=precision, config=config, output=tmp_path/'continue', resume_from=interrupted.checkpoint)
     left, right = restore_learning(whole.checkpoint), restore_learning(continued.checkpoint)
     for a, b in zip(jax.tree.leaves(left), jax.tree.leaves(right), strict=True):
         np.testing.assert_array_equal(a, b)
@@ -88,7 +89,7 @@ def test_batched_real_learning_replay_and_checkpoint_resume(tmp_path, monkeypatc
     policy = load_policy(continued.checkpoint)
     assert policy(factory().reset(671)).shape == (3,)
     with pytest.raises(ValueError, match='binding differs'):
-        train(factory, method=method, precision=False, config=replace(config, num_envs=2), output=tmp_path/'wrong', resume_from=continued.checkpoint)
+        train(factory, method=method, precision=precision, config=replace(config, num_envs=2), output=tmp_path/'wrong', resume_from=continued.checkpoint)
 
 
 def test_batch_refuses_unrepresented_moving_state(tmp_path, monkeypatch):

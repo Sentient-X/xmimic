@@ -32,7 +32,7 @@ class Environment(Protocol):
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]: ...
     def state(self) -> dict[str, np.ndarray]: ...
     def restore(self, state: dict[str, np.ndarray]) -> None: ...
-    def reward_from_observation(self, observation, previous_action): ...
+    def reward_transition(self, previous, following, action): ...
     def project_observation(self, previous, action, predicted): ...
 
 
@@ -167,7 +167,7 @@ def _kernels(config, reward, action_dim, project=None):
                 following = project(obs, action, predict_next(wm, buffers, obs, action))
                 # The common environment owns task semantics, including action-rate
                 # cost. Complete command and reward-history state remain in obs.
-                r = jax.vmap(reward)(following, obs[:, 3*action_dim:4*action_dim])
+                r = jax.vmap(reward)(obs, following, action)
                 return following, config.gamma**index*r
             _, rewards = jax.lax.scan(step, starts, jnp.arange(config.imagination_horizon))
             return -rewards.sum(0).mean()
@@ -217,6 +217,9 @@ def _train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wo
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     env = env_factory()
+    objective = env.binding.get('objective')
+    if objective is not None and objective['gamma'] != config.gamma:
+        raise ValueError('Reward potential discount must equal learner gamma')
     N = config.num_envs
     batched = N > 1
     seeds = config.seed+np.arange(N) if batched else config.seed
@@ -237,7 +240,7 @@ def _train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wo
         _, carry, _, elapsed = checkpoint.restore_checkpoint(Path(resume_from), {}, carry, binding=binding)
         env.restore(carry['env'])
         latest = Path(resume_from)
-    ppo, fit, imagined = _kernels(config, env.reward_from_observation, env.action_dim, project)
+    ppo, fit, imagined = _kernels(config, env.reward_transition, env.action_dim, project)
     policy = jax.jit(lambda pi, norm, obs: _mean(pi, norm, obs))
     began = time.monotonic()
     while int(carry['it']) < config.iterations:

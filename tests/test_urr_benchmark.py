@@ -84,11 +84,13 @@ def test_precision_reward_uses_vector_tolerance_and_exact_action_history(tmp_pat
     assert float(env._ratio(error)) > 1  # each axis alone is inside; the vector is not.
     obs[env.error_slice] = error
     obs[3*env.action_dim:4*env.action_dim] = .5
-    before = np.zeros(env.action_dim)
-    batch = env.reward_from_observation(jnp.stack([jnp.asarray(obs), jnp.asarray(obs)]), before)
-    scalar = env.reward_from_observation(obs, before)
+    before = obs.copy()
+    before[3*env.action_dim:4*env.action_dim] = 0.
+    action = np.full(env.action_dim, .5)
+    batch = env.reward_transition(before, jnp.stack([jnp.asarray(obs), jnp.asarray(obs)]), action)
+    scalar = env.reward_transition(before, obs, action)
     np.testing.assert_allclose(batch, [scalar, scalar], atol=1e-7)
-    assert float(env.reward_from_observation(obs, np.full(env.action_dim, .5))) > float(scalar)
+    assert float(env.reward_transition(obs, obs, action)) > float(scalar)
 
 
 def test_evaluation_preserves_all_URR_samples_and_refuses_policy_rebinding(tmp_path, monkeypatch):
@@ -127,10 +129,10 @@ def test_precision_reward_has_finite_zero_subgradient(tmp_path, monkeypatch):
     env = URRPhysicsEnv(prepared_fixture(tmp_path, monkeypatch), TaskConfig(precision=True))
     obs = env.reset(0)
     obs[env.error_slice] = 0
-    gradient = jax.grad(lambda x: env.reward_from_observation(x, jnp.zeros(env.action_dim)))(jnp.asarray(obs))
+    gradient = jax.grad(lambda x: env.reward_transition(obs, x, jnp.zeros(env.action_dim)))(jnp.asarray(obs))
     assert np.isfinite(gradient).all()
     obs[env.error_slice.start] = .003
-    gradient = jax.grad(lambda x: env.reward_from_observation(x, jnp.zeros(env.action_dim)))(jnp.asarray(obs))
+    gradient = jax.grad(lambda x: env.reward_transition(obs, x, jnp.zeros(env.action_dim)))(jnp.asarray(obs))
     assert np.isfinite(gradient).all()  # exact orientation with nonzero position
 
 
@@ -161,7 +163,7 @@ def test_structured_observation_matches_physics_and_ignores_hallucinated_channel
     projected = env.project_observation(previous, action, proposal)
     np.testing.assert_allclose(projected, following, atol=3e-4, rtol=1e-5)
     np.testing.assert_array_equal(projected[env.goal_slice], previous[env.goal_slice])
-    np.testing.assert_allclose(env.reward_from_observation(projected, previous[3*env.action_dim:4*env.action_dim]), reward, atol=2e-5)
+    np.testing.assert_allclose(env.reward_transition(previous, projected, action), reward, atol=2e-5)
     jacobian = jax.jacrev(lambda prediction: env.project_observation(previous, action, prediction))(jnp.asarray(proposal))
     assert np.isfinite(jacobian).all()
     np.testing.assert_array_equal(jacobian[:, 2*env.action_dim:], 0.)
@@ -173,8 +175,8 @@ def test_structured_identity_goal_gradient_is_finite_and_moving_state_is_refused
     env.reset(0)
     env.set_goal(env._goal_for(env.data.qpos[env.qadr]))
     obs = env.observation()
-    grad = jax.grad(lambda predicted: env.reward_from_observation(
-        env.project_observation(obs, jnp.zeros(env.action_dim), predicted), jnp.zeros(env.action_dim)))(jnp.asarray(obs))
+    grad = jax.grad(lambda predicted: env.reward_transition(
+        obs, env.project_observation(obs, jnp.zeros(env.action_dim), predicted), jnp.zeros(env.action_dim)))(jnp.asarray(obs))
     assert np.isfinite(grad).all()
     moving = URRPhysicsEnv(prepared, TaskConfig(moving=True, episode_steps=6, hold_steps=2))
     initial = moving.reset(0)
@@ -221,3 +223,14 @@ def test_structured_aperture_uses_declared_owner_relation(tmp_path, monkeypatch,
         projected = env.project_observation(previous, np.zeros(3), proposed)
         expected = env.goal.apertures['opening']-gripper.aperture_from_drive(value)
         np.testing.assert_allclose(projected[env.error_slice][-1], expected, atol=1e-8)
+
+        # The aperture reward is the declared 1D position-pair extension, not
+        # fabricated physical keypoints or a normalized-joint proxy.
+        actual_reward = env.reward_transition(previous, projected, np.zeros(3))
+        zero_gap = np.asarray(projected).copy()
+        zero_gap[env.error_slice.stop-1] = 0.
+        delta = actual_reward-env.reward_transition(previous, zero_gap, np.zeros(3))
+        np.testing.assert_allclose(delta, env.control_dt*(-.2*abs(expected)-.1*np.tanh(abs(expected)/.1)), atol=1e-8)
+        error = np.zeros(env.error_dim)
+        error[-1] = .00931
+        np.testing.assert_allclose(env._precision_gain(error, np), 1.)

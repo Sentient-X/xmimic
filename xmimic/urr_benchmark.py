@@ -42,10 +42,12 @@ class TaskConfig:
     hold_steps: int = 25
     target_fraction: float = .08
     moving: bool = False
+    reward_gamma: float = .99
 
     def __post_init__(self):
         if (self.episode_steps < 2 or self.hold_steps < 1
                 or self.hold_steps > self.episode_steps or self.partition not in {"train", "evaluation"}
+                or not 0 < self.reward_gamma <= 1
                 or not 0 < self.target_fraction <= .5
                 or min(self.position_tolerance_m, self.orientation_tolerance_rad,
                        self.aperture_tolerance_m) <= 0):
@@ -65,6 +67,23 @@ def _safe_norm(value, axis=-1):
     square = jnp.sum(jnp.square(value), axis=axis)
     positive = square > 0
     return jnp.where(positive, jnp.sqrt(jnp.where(positive, square, 1.)), 0.)
+
+
+def policyik_pose_reward(position_error, rotation_error, goal_rotation):
+    """Pinned PolicyIK/OpenArm tracking terms, before control-dt integration.
+
+    Error is world goal-minus-achieved position and Log(R_goal R_actual.T).
+    Three literal zero-sum .45m virtual keypoints couple pose translation and
+    orientation. These are reward features, never physical robot geometry.
+    """
+    position_error, rotation_error = jnp.asarray(position_error), jnp.asarray(rotation_error)
+    offsets = .45 * (jnp.eye(3) - jnp.ones((3, 3))/3.)
+    desired = jnp.einsum('...ij,kj->...ki', goal_rotation, offsets)
+    achieved = jnp.einsum('...ij,...kj->...ki', rot.so3_exp(-rotation_error), desired)
+    keypoint_error = _safe_norm(position_error[..., None, :]+desired-achieved).mean(-1)
+    distance = _safe_norm(position_error)
+    return (-.2*distance + .1*(1.-jnp.tanh(distance/.1))
+            + 1.-jnp.tanh(keypoint_error/.20) + 1.-jnp.tanh(keypoint_error/.05))
 
 
 class URRPhysicsEnv:
@@ -146,7 +165,7 @@ class URRPhysicsEnv:
         self.tolerances = np.asarray([v for _ in self.roles for v in
                                      [config.position_tolerance_m] * 3 + [config.orientation_tolerance_rad] * 3]
                                     + [config.aperture_tolerance_m] * len(self.apertures))
-        self.observation_dim = self.error_slice.stop + (2 * self.error_dim if config.precision else 0) + 3
+        self.observation_dim = self.error_slice.stop + (2 * self.error_dim if config.precision else 0) + 4
         self.physical_state_dim = 2*self.action_dim
         self.projection_kinematics = DifferentiableKinematics.from_mujoco(
             self.model, self.names, dependent_joints=self.spec.get('dependent_joints', ()),
@@ -168,8 +187,12 @@ class URRPhysicsEnv:
                         "environment_code_sha256": digest(Path(__file__)), "task": asdict(config),
                         "owner_code": {cls.__module__: digest(Path(sys.modules[cls.__module__].__file__))
                                        for cls in (Embodiment, Kinematics, GripperSpec, MotionBinding, DifferentiableKinematics)},
-                        "projection": "physical-q-qd/canonical-observation-v1", "rotation_code_sha256": digest(Path(rot.__file__)),
-                        "observation": "native_q_normalized,qd_scaled,command_error_scaled,previous_action,URR_goal_3p6R_aperture,raw_error,optional_coarse_fine,progress_dwell",
+                        "projection": "physical-q-qd/canonical-observation-v2",
+                        "objective": {"version": "policyik-source-terms-urr/v2", "gamma": config.reward_gamma,
+                                      "source": "PolicyIK@22f3a5c/OpenArm@bad82e23",
+                                      "aggregation": "sum poses; aperture position-pair extension",
+                                      "time_integrated": True}, "rotation_code_sha256": digest(Path(rot.__file__)),
+                        "observation": "native_q_normalized,qd_scaled,command_error_scaled,previous_action,URR_goal_3p6R_aperture,raw_error,optional_world_coarse_fine,history_valid,best_after_scaled,progress_dwell",
                         "action": "bounded native-unit joint-reference increments" if config.accumulate else "full-authority nominal-relative references with shared native-unit rate governor",
                         "observation_dim": self.observation_dim, "action_dim": self.action_dim,
                         "scope": "nominal simulation; FK-generated task goals; no physical qualification"}
@@ -181,6 +204,7 @@ class URRPhysicsEnv:
         self.best = 0.
         self.progress = 0.
         self.dwell = 0
+        self.history_valid = False
 
     def _set_positions(self, data, q):
         data.qpos[self.qadr] = q
@@ -217,6 +241,7 @@ class URRPhysicsEnv:
         self.goal = goal
         self.best = float(self._ratio(self.errors()))
         self.progress, self.dwell = 0., 0
+        self.history_valid = False
 
     def reset(self, seed: int = 0) -> np.ndarray:
         if type(seed) is not int or seed < 0:
@@ -263,7 +288,7 @@ class URRPhysicsEnv:
                   self.previous_action, np.asarray(goal), error]
         if self.config.precision:
             values.extend([np.clip(error / self.coarse, -1, 1), np.clip(error / self.tolerances, -1, 1)])
-        values.append(np.asarray([self.best / 100., self.progress, self.dwell / self.config.hold_steps]))
+        values.append(np.asarray([float(self.history_valid), self.best / 100., self.progress, self.dwell / self.config.hold_steps]))
         result = np.concatenate(values).astype(np.float32)
         if result.shape != (self.observation_dim,) or not np.isfinite(result).all():
             raise ValueError("Nonfinite or malformed benchmark observation")
@@ -278,27 +303,59 @@ class URRPhysicsEnv:
             ratios.append(jnp.max(jnp.abs(error[..., 6 * len(self.roles):]) / self.config.aperture_tolerance_m, axis=-1))
         return jnp.max(jnp.stack(ratios, axis=-1), axis=-1)
 
-    def reward_from_observation(self, observation, previous_action=None):
-        obs = jnp.asarray(observation)
-        error = obs[..., self.error_slice]
-        coarse = jnp.asarray(self.coarse)
-        reward = jnp.mean(jnp.exp(-jnp.square(error / coarse)), axis=-1)
-        if self.config.precision:
-            ratio = self._ratio(error)
-            reward = reward + 1 - jnp.tanh(ratio) + obs[..., -2] + .1 * obs[..., -1]
-        if previous_action is not None:
-            action = obs[..., 3 * self.action_dim:4 * self.action_dim]
-            reward = reward - self.action_rate_weight * jnp.mean(jnp.square(action - jnp.asarray(previous_action)), axis=-1)
-        return reward
+    def reward_transition(self, previous, following, action):
+        """One source-derived objective for real and imagined transitions.
 
-    def _command_reference(self, command, action, error, xp, *, ratio=None):
-        """One command transition shared by physics and differentiable imagination."""
+        Native PolicyIK is single-pose, 30Hz and radians-only. This declared URR
+        adaptation sums its tracking expression over required poses, applies the
+        existing position-pair to aperture errors in metres, and uses global rho.
+        Normalized action-rate cost is retained instead of copying radian-only
+        velocity costs to mixed hinge/slide coordinates. All terms integrate dt.
+        """
+        previous, obs, action = jnp.asarray(previous), jnp.asarray(following), jnp.asarray(action)
+        error, goal = obs[..., self.error_slice], obs[..., self.goal_slice]
+        reward = jnp.zeros(obs.shape[:-1], dtype=obs.dtype)
+        for i in range(len(self.roles)):
+            first, second = goal[..., 9*i+3:9*i+6], goal[..., 9*i+6:9*i+9]
+            desired = jnp.stack((first, second, jnp.cross(first, second)), axis=-1)
+            reward = reward + policyik_pose_reward(error[..., 6*i:6*i+3], error[..., 6*i+3:6*i+6], desired)
+        if self.apertures:
+            gap = jnp.abs(error[..., 6*len(self.roles):])
+            reward = reward + jnp.sum(-.2*gap+.1*(1.-jnp.tanh(gap/.1)), axis=-1)
         if self.config.precision:
-            if ratio is None:
-                ratio = np.asarray(self._ratio(error), dtype=float) if xp is np else self._ratio(error)
-            gain = .1+.9*xp.clip((ratio-1)/19., 0., 1.)
-        else:
-            gain = xp.asarray(1.)
+            rho = self._ratio(error)
+            previous_rho = self._ratio(previous[..., self.error_slice])
+            best_before = previous[..., -3]*100.
+            valid = (previous[..., -4] > .5) & jnp.all(previous[..., self.goal_slice] == goal, axis=-1)
+            def utility(value):
+                return .5*(1.+jnp.tanh((1.-value)/.5))
+            improvement = 26.831*jnp.maximum(utility(rho)-utility(best_before), 0.)
+            potential = -self.config.reward_gamma*jnp.minimum(50., rho)+jnp.minimum(50., previous_rho)
+            backslide = -.2*jnp.minimum(3., jnp.maximum(rho-best_before, 0.))
+            dwell = (rho <= 1.).astype(obs.dtype)
+            reward = reward + jnp.where(valid, improvement+potential+backslide+dwell, 0.)
+            # q is normalized to [-1,1], so this is native-range normalized
+            # distance to the nearer declared limit, equally valid for m and rad.
+            margin = jnp.min((1.-jnp.abs(obs[..., :self.action_dim]))/2., axis=-1)
+            reward = reward - jnp.where(rho > 10., jnp.clip(1.-margin/.05, 0., 1.), 0.)
+        old_action = previous[..., 3*self.action_dim:4*self.action_dim]
+        reward = reward - self.action_rate_weight*jnp.mean(jnp.square(action-old_action), axis=-1)
+        return self.control_dt*reward
+
+    def _precision_gain(self, error, xp):
+        pose = error[..., :6*len(self.roles)].reshape(error.shape[:-1]+(len(self.roles), 6))
+        norm = (lambda value: np.linalg.norm(value, axis=-1)) if xp is np else _safe_norm
+        position = xp.max(norm(pose[..., :3]), axis=-1)
+        angle = xp.max(norm(pose[..., 3:]), axis=-1)
+        if self.apertures:
+            position = xp.maximum(position, xp.max(xp.abs(error[..., 6*len(self.roles):]), axis=-1))
+        p = xp.clip((position-.0005)/(.00931-.0005), 0., 1.)
+        r = xp.clip((angle-np.deg2rad(.415))/np.deg2rad(2.328-.415), 0., 1.)
+        return .1+.9*xp.maximum(p, r)
+
+    def _command_reference(self, command, action, error, xp):
+        """One command transition shared by physics and differentiable imagination."""
+        gain = self._precision_gain(error, xp) if self.config.precision else xp.asarray(1.)
         if self.config.accumulate:
             desired = command+self.scale*gain[..., None]*action
         else:
@@ -350,10 +407,10 @@ class URRPhysicsEnv:
         if self.config.precision:
             values.extend((jnp.clip(error/self.coarse, -1., 1.), jnp.clip(error/self.tolerances, -1., 1.)))
         ratio = self._ratio(error)
-        best = previous[..., -3]*100.
+        best = jnp.where(previous[..., -4] > .5, previous[..., -3]*100., ratio)
         progress = jnp.maximum(0., best-ratio)/100.
         dwell = jnp.where(ratio <= 1., previous[..., -1]+1./self.config.hold_steps, 0.)
-        values.append(jnp.stack((jnp.minimum(best, ratio)/100., progress, dwell), axis=-1))
+        values.append(jnp.stack((jnp.ones_like(ratio), jnp.minimum(best, ratio)/100., progress, dwell), axis=-1))
         return jnp.concatenate(values, axis=-1)
 
     def step(self, action):
@@ -361,8 +418,8 @@ class URRPhysicsEnv:
         if action.shape != (self.action_dim,) or not np.isfinite(action).all():
             raise ValueError("Action must be finite and match native coordinates")
         action = np.clip(action, -1, 1)
+        previous = self.observation()
         self.command = self._command_reference(self.command, action, self.errors(), np)
-        previous = self.previous_action.copy()
         self.previous_action = action.copy()
         self.data.ctrl[self.controls] = self.command
         mujoco.mj_step(self.model, self.data, nstep=self.substeps)
@@ -378,12 +435,15 @@ class URRPhysicsEnv:
                 self.set_goal(self._goal_for(self.start_q+fraction*(self.target_q-self.start_q)))
         error = self.errors()
         ratio = float(self._ratio(error))
+        if not self.history_valid:
+            self.best = ratio
         self.progress = max(0., self.best - ratio) / 100.
         self.best = min(self.best, ratio)
         self.dwell = self.dwell + 1 if self._within(error) else 0
+        self.history_valid = True
         obs = self.observation()
         done = self.steps >= self.config.episode_steps
-        return obs, float(self.reward_from_observation(obs, previous)), done, self.measurement(error)
+        return obs, float(self.reward_transition(previous, obs, action)), done, self.measurement(error)
 
     def _within(self, error) -> bool:
         position = error[:6 * len(self.roles)].reshape(-1, 6)
@@ -416,7 +476,7 @@ class URRPhysicsEnv:
         rng_buffer[:len(rng_bytes)] = np.frombuffer(rng_bytes, dtype=np.uint8)
         return {"physics": physics, "command": self.command.copy(), "previous_action": self.previous_action.copy(),
                 "steps": np.asarray(self.steps), "best": np.asarray(self.best), "progress": np.asarray(self.progress),
-                "dwell": np.asarray(self.dwell), "start_q": self.start_q.copy(), "target_q": self.target_q.copy(),
+                "dwell": np.asarray(self.dwell), "history_valid": np.asarray(self.history_valid), "start_q": self.start_q.copy(), "target_q": self.target_q.copy(),
                 "rng_json": rng_buffer, "rng_length": np.asarray(len(rng_bytes)),
                 "goal_position": np.asarray([self.goal.poses[role].position for role in self.roles]),
                 "goal_quaternion": np.asarray([self.goal.poses[role].quaternion for role in self.roles]),
@@ -429,6 +489,7 @@ class URRPhysicsEnv:
         self.command = np.asarray(state["command"]).copy()
         self.previous_action = np.asarray(state["previous_action"]).copy()
         self.steps, self.dwell = int(state["steps"]), int(state["dwell"])
+        self.history_valid = bool(state["history_valid"])
         self.best, self.progress = float(state["best"]), float(state["progress"])
         self.start_q, self.target_q = np.asarray(state["start_q"]).copy(), np.asarray(state["target_q"]).copy()
         self.rng.bit_generator.state = json.loads(np.asarray(state["rng_json"], dtype=np.uint8)[:int(state["rng_length"])].tobytes())
@@ -496,10 +557,9 @@ class URRPhysicsBatch:
         self.workers = min(num_envs, 8, os.cpu_count() or 1)
         self.pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix='urr-physics')
         self.groups = [self.envs[i::self.workers] for i in range(self.workers)]
-        self._ratio = jax.jit(template._ratio)
         self._channels = jax.jit(template._observation_channels)
-        self._reward = jax.jit(template.reward_from_observation)
-        self.reward_from_observation = template.reward_from_observation
+        self._reward = jax.jit(template.reward_transition)
+        self.reward_transition = template.reward_transition
         self.project_observation = template.project_observation
         self.observations = np.empty((num_envs, self.observation_dim), np.float32)
 
@@ -529,8 +589,7 @@ class URRPhysicsBatch:
         actions = np.clip(actions, -1., 1.)
         previous = self.observations.copy()
         command = np.stack([env.command for env in self.envs])
-        ratio = np.asarray(self._ratio(previous[:, t.error_slice]), dtype=float) if t.config.precision else None
-        command = t._command_reference(command, actions, previous[:, t.error_slice], np, ratio=ratio)
+        command = t._command_reference(command, actions, previous[:, t.error_slice], np)
         for env, reference, action in zip(self.envs, command, actions, strict=True):
             env.command = reference.copy()
             env.previous_action = action.copy()
@@ -544,9 +603,10 @@ class URRPhysicsBatch:
         rotations = np.stack([env.data.xmat[ids].reshape(-1, 3, 3) for env in self.envs])
         physical = np.concatenate(((q-(t.hi+t.lo)/2)/((t.hi-t.lo)/2), qd*t.control_dt/t.scale), axis=-1)
         self.observations = np.asarray(self._channels(previous, actions, physical, q, command, positions, rotations)).copy()
-        rewards = np.asarray(self._reward(self.observations, previous[:, 3*t.action_dim:4*t.action_dim]))
+        rewards = np.asarray(self._reward(previous, self.observations, actions))
         for env, obs in zip(self.envs, self.observations, strict=True):
             env.steps += 1
+            env.history_valid = bool(obs[-4])
             env.best, env.progress = float(obs[-3])*100., float(obs[-2])
             env.dwell = round(float(obs[-1])*env.config.hold_steps)
         done = np.asarray([env.steps >= env.config.episode_steps for env in self.envs])
