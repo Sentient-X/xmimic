@@ -365,3 +365,53 @@ def test_interrupted_artifact_copy_resumes_without_executing_paid_child(
     artifact = execute(context)
     assert (artifact / "result").read_text() == "success"
     assert (context.run_dir / "native-steps/000.json").read_bytes() == journal
+
+
+@pytest.mark.parametrize("after_link", [False, True])
+@pytest.mark.parametrize(
+    "destination_name", ["native-publication", "native-provenance.json"]
+)
+def test_fsynced_publication_write_reconciles_exact_destination(
+    tmp_path, monkeypatch, after_link, destination_name
+):
+    import os
+    import subprocess
+    from pathlib import Path
+    from sx_training import execute
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    original = os.link
+    with monkeypatch.context() as interrupted:
+
+        def stop_at_link(source, destination, **kwargs):
+            if (
+                Path(destination).parent.name == destination_name
+                or Path(destination).name == destination_name
+            ):
+                if after_link:
+                    original(source, destination, **kwargs)
+                raise OSError("interrupted after temp fsync")
+            return original(source, destination, **kwargs)
+
+        interrupted.setattr(os, "link", stop_at_link)
+        with pytest.raises(OSError, match="after temp fsync"):
+            execute(context)
+    assert list(context.run_dir.rglob(".native-write-*"))
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *a, **k: pytest.fail("paid child rerun")
+    )
+    artifact = execute(context)
+    assert (artifact / "result").read_text() == "success"
+    assert not list(artifact.glob(".native-write-*"))
+
+
+def test_unknown_temporary_name_is_not_ignored(tmp_path, monkeypatch):
+    from sx_training import execute
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD)
+    staging = context.run_dir / "native-publication"
+    staging.mkdir()
+    (staging / ".native-write-unbound").write_text("unknown")
+    with pytest.raises(ValueError, match="staging changed"):
+        execute(context)
+    assert (staging / ".native-write-unbound").read_text() == "unknown"

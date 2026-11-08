@@ -389,23 +389,50 @@ def _regular_tree(root):
     return files
 
 
+def _pending_write(path, sha256):
+    # Bind retained temporary bytes to both their destination and expected content.
+    name_hash = hashlib.sha256(path.name.encode()).hexdigest()
+    return path.with_name(f".native-write-{name_hash}-{sha256}")
+
+
+def _reconcile_writes(root, expected):
+    import os
+
+    files = _regular_tree(root)
+    for name, sha256 in expected.items():
+        destination = root / name
+        temporary = _pending_write(destination, sha256)
+        relative = temporary.relative_to(root).as_posix()
+        if relative not in files:
+            continue
+        if files[relative] != sha256:
+            raise ValueError("Native pending write differs from expected bytes")
+        if name in files:
+            if files[name] != sha256:
+                raise ValueError("Native pending destination changed")
+        else:
+            os.link(temporary, destination)
+        temporary.unlink()
+    return _regular_tree(root)
+
+
 def _write_exact(path, payload):
     import os
-    import tempfile
 
     path = Path(path)
     for parent in (path, *path.parents):
         if parent.is_symlink():
             raise ValueError("Native managed path contains a link")
+    sha256 = hashlib.sha256(payload).hexdigest()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _pending_write(path, sha256)
+    if temporary.exists() or temporary.is_symlink():
+        _reconcile_writes(path.parent, {path.name: sha256})
     if path.exists():
         if not path.is_file() or path.read_bytes() != payload:
             raise ValueError("Native retained bytes changed")
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=path.parent, prefix=".native-write-", delete=False
-    ) as stream:
-        temporary = Path(stream.name)
+    with temporary.open("xb") as stream:
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
@@ -455,7 +482,7 @@ def _publish_native(context, output):
             raise ValueError("Native published output changed")
         return artifact
     staging = context.run_dir / "native-publication"
-    retained = _regular_tree(staging)
+    retained = _reconcile_writes(staging, expected)
     if any(expected.get(name) != sha for name, sha in retained.items()):
         raise ValueError("Native publication staging changed")
     staging.mkdir(exist_ok=True)
@@ -511,7 +538,7 @@ def run(context):
     expected_source = {
         name: hashlib.sha256(value).hexdigest() for name, value in payloads.items()
     }
-    retained_source = _regular_tree(source)
+    retained_source = _reconcile_writes(source, expected_source)
     if any(expected_source.get(name) != sha for name, sha in retained_source.items()):
         raise ValueError("Native source has modified or unrecorded files")
     source.mkdir(exist_ok=True)
@@ -590,6 +617,26 @@ def run(context):
             raise ValueError("Native step rewrote previously completed output")
         expected_output = retained["files"]
         completed.append(retained)
+
+    def provenance_bytes():
+        return canonical_json(
+            {
+                "method": method.value,
+                "phase": phase.value,
+                "seed": config["seed"],
+                "repository": selected.repository,
+                "revision": selected.revision,
+                "source_sha256": selected.archive_sha256,
+                "steps": completed,
+                "scope": "Native upstream task; not a matched stationary adaptation or physical qualification",
+            }
+        ).encode()
+
+    if len(completed) == len(commands):
+        _reconcile_writes(
+            output,
+            {"native-provenance.json": hashlib.sha256(provenance_bytes()).hexdigest()},
+        )
     actual = _regular_tree(output)
     provenance = actual.pop("native-provenance.json", None)
     if actual != expected_output:
@@ -651,19 +698,5 @@ def run(context):
         os.replace(temporary, receipt)
         expected_output = files
         completed.append(record)
-    _write_exact(
-        output / "native-provenance.json",
-        canonical_json(
-            {
-                "method": method.value,
-                "phase": phase.value,
-                "seed": config["seed"],
-                "repository": selected.repository,
-                "revision": selected.revision,
-                "source_sha256": selected.archive_sha256,
-                "steps": completed,
-                "scope": "Native upstream task; not a matched stationary adaptation or physical qualification",
-            }
-        ).encode(),
-    )
+    _write_exact(output / "native-provenance.json", provenance_bytes())
     return _publish_native(context, output)

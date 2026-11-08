@@ -45,11 +45,13 @@ license. NVIDIA's [IsaacSim5.1 requirements](https://docs.isaacsim.omniverse.nvi
 exclude GPUs without RT cores, including H100/A100; select a supported RTX-capable
 managed allocation such as L40S. A different simulator is an adaptation, not vanilla.
 
-Twenty-four local tests cover source corruption, archive traversal/link refusal, distinct
+Twenty-nine local tests cover source corruption, archive traversal/link refusal, distinct
 native protocols, training/evaluation intent, actual child-process restart refusal, and
 real `TrainingContext.execute` artifact custody. Completed output is copied atomically
 to the required `run_dir/artifact`; publication interruption resumes from verified
-completed steps without restarting native computation. Source and output inventories
+completed steps without restarting native computation. Temporary writes bind the
+destination name and content digest, and exact-byte reconciliation covers interruption
+after fsync both before and after publication linking. Unknown temporary files refuse. Source and output inventories
 reject unrecorded files and links. Stop handling kills the whole process group even
 when its leader exits before a SIGTERM-ignoring descendant.
 They are not native simulation results. Runtime publication, managed dispatch and
