@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from xmimic.artifact_cache import Provenance
+from xmimic.artifact_cache import Provenance, _atomic, _json, content_hash
 from xmimic.config import Config
 from xmimic.managed_pipeline import (
     JobSettings,
@@ -28,15 +28,25 @@ from xmimic.managed_pipeline import (
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--inputs", type=Path, help="Existing prepared input closure")
+    target.add_argument("--embodiment", help="Registered sx-embodiments name")
+    target.add_argument(
+        "--embodiment-document", type=Path, help="Pinned canonical body document"
+    )
+    parser.add_argument("--source", type=Path, help="Complete human SOMA BVH clip")
+    parser.add_argument("--nominal-profile", type=Path)
+    parser.add_argument("--recipe", type=Path)
+    parser.add_argument("--training-profile", type=Path)
     parser.add_argument(
-        "--inputs", type=Path, required=True, help="prepare_embodiment_job output"
+        "--profile", choices=("production", "preview"), default="production"
     )
     parser.add_argument(
         "--source-entry",
         required=True,
         help="Catalog source or pack that supplied motion",
     )
-    parser.add_argument("--embodiment-id", required=True)
+    parser.add_argument("--embodiment-id", help="Optional expected exact body digest")
     parser.add_argument("--clip-id", required=True)
     parser.add_argument(
         "--source-group", required=True, help="original/mirror family identity"
@@ -63,8 +73,72 @@ def arguments():
     return parser.parse_args()
 
 
+def prepare_inputs(args):
+    """Resolve a selected body once and retain its exact portable input closure."""
+    from sx_embodiments import Embodiment, embodiments
+    from tools.prepare_embodiment_job import prepare
+    from xmimic.retarget_source import ParseLimits, parse_soma_bvh
+
+    if args.inputs is None:
+        paths = (args.source, args.nominal_profile, args.recipe, args.training_profile)
+        if any(path is None for path in paths):
+            raise ValueError(
+                "Embodiment selection requires source, nominal-profile, recipe and training-profile"
+            )
+        if args.source.stat().st_size > ParseLimits().max_bytes:
+            raise ValueError("Source exceeds the parser size limit")
+        body = (
+            Embodiment.from_json(args.embodiment_document.read_text())
+            if args.embodiment_document is not None
+            else embodiments[args.embodiment]
+        )
+        import hashlib
+
+        payloads = [path.read_bytes() for path in paths]
+        identity = {
+            "embodiment_id": str(body.id),
+            "source_entry": args.source_entry,
+            "files": [hashlib.sha256(payload).hexdigest() for payload in payloads],
+        }
+        key = content_hash(identity)
+        directory = args.run_dir / "inputs" / key
+        args.run_dir.mkdir(parents=True, exist_ok=True)
+        request = args.run_dir / "preparation-request.json"
+        if request.exists() and json.loads(request.read_bytes()) != identity:
+            raise ValueError(
+                "Run directory already binds another body or source; choose another run directory"
+            )
+        _atomic(request, _json(identity))
+        if not directory.exists():
+            prepare(body, *payloads, source_entry=args.source_entry, output=directory)
+        args.inputs = directory
+    elif any(
+        path is not None
+        for path in (
+            args.source,
+            args.nominal_profile,
+            args.recipe,
+            args.training_profile,
+        )
+    ):
+        raise ValueError("Prepared inputs already own source and profiles")
+    body = Embodiment.from_json((args.inputs / "embodiment.json").read_text())
+    if args.embodiment_id is not None and args.embodiment_id != str(body.id):
+        raise ValueError("Selected embodiment differs from the expected identity")
+    args.embodiment_id = str(body.id)
+    source = args.inputs / "source.bvh"
+    if source.stat().st_size > ParseLimits().max_bytes:
+        raise ValueError("Source exceeds the parser size limit")
+    from xmimic.retarget_workflow import recipe_from_json
+
+    recipe = recipe_from_json((args.inputs / "recipe.json").read_bytes())
+    return parse_soma_bvh(
+        source.read_bytes(), world_from_source=recipe.world_from_source
+    ).frame_count
+
+
 async def run(args):
-    from sx import Sx
+    from sx.client import Sx
     from sx.credentials import api_key_for
     from sx._transport import ConnectionProfile, Endpoints
     from sx_auth.principal import ProjectId
@@ -78,12 +152,19 @@ async def run(args):
         or not set(raw) <= {f.name for f in fields(Config)} - forbidden
     ):
         raise ValueError("Training config contains unknown or managed-path options")
+    defaults = Config()
+    if any(
+        type(value) is not type(getattr(defaults, name)) for name, value in raw.items()
+    ):
+        raise ValueError("Training option type differs from Config")
     cfg = Config(**raw)
     if cfg.iterations % cfg.log_every or cfg.ckpt_every % cfg.log_every:
         raise ValueError(
             "Managed iterations and checkpoint cadence must be multiples of log_every"
         )
-    key = os.environ.get("SX_API_KEY") or api_key_for(ConnectionProfile.PRODUCTION)
+    frames = prepare_inputs(args)
+    connection = ConnectionProfile(args.profile)
+    key = os.environ.get("SX_API_KEY") or api_key_for(connection)
     if not key:
         raise ValueError("Sign in to SentientX before launching this project workflow")
     provenance = Provenance(
@@ -98,7 +179,7 @@ async def run(args):
         args.cpu_budget_micros,
         4,
         16,
-        1,
+        frames,
         {
             "embodiment_id": args.embodiment_id,
             "clip_id": args.clip_id,
@@ -117,9 +198,9 @@ async def run(args):
         cfg.iterations,
         {},
     )
-    url = Endpoints.resolve(ConnectionProfile.PRODUCTION).for_door(CATALOG.name)
+    url = Endpoints.resolve(connection).for_door(CATALOG.name)
     with CatalogClient(url, api_key=key, project_id=ProjectId(args.project)) as catalog:
-        client = Sx(project=args.project, api_key=key)
+        client = Sx(project=args.project, api_key=key, profile=connection)
         try:
             inputs = publish_inputs(
                 catalog,

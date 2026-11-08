@@ -30,6 +30,31 @@ python tools/managed_train.py \
   --cache-dir /absolute/path/persistent-cache
 ```
 
+To select a different embodiment in the same workflow, replace `--inputs` and
+`--embodiment-id` with:
+
+```bash
+--embodiment REGISTERED_NAME \
+--source /absolute/path/complete-soma-clip.bvh \
+--nominal-profile /absolute/path/nominal.json \
+--recipe /absolute/path/retarget-recipe.json \
+--training-profile /absolute/path/training-profile.json
+```
+
+For a pinned development composition use `--embodiment-document body.json` instead
+of `--embodiment`. Preparation resolves the body through `sx-embodiments`, retains
+its complete asset closure under the run directory, and derives its identity; no
+second manually entered body ID is required. Reopening the same run verifies the
+same body/source/profile binding. A changed selection requires a new run directory.
+Use `--profile preview` for the preview platform. Both stages return ordinary
+training operation references usable with `sx operation watch`, `status`, `result`
+and `cancel`.
+
+The platform's `sx training custom start --authored-trainer trainer.json
+--artifact-inputs '<ArtifactPackInputs JSON>' --execution '<TrainingExecution JSON>'`
+exposes the same contract directly. The fork owns this workflow's human-to-robot
+mapping; the platform owns admission and Modal execution for every embodiment.
+
 The default bounds are ten minutes/$1 for CPU and ten minutes/$5 for GPU. They are
 limits, not runtime or cost predictions. Reinvoke with the same run directory and
 settings to reattach to the same operations. A changed request refuses reuse of a
