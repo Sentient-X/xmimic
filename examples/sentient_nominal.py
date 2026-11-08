@@ -20,13 +20,14 @@ from sx_embodiments import Embodiment
 from sx_embodiments.embodiment import embodiment_from_definition
 from sx_embodiments.known.humanoid import SENTIENT_HUMANOID_SPEC
 from sx_embodiments.kinematics import Kinematics
-from sx_embodiments.nominal_mujoco import NominalJoint, NominalProfile, SupportContact, export_nominal_mujoco
+from sx_embodiments.nominal_mujoco import CollisionMode, NominalJoint, NominalProfile, SupportContact, export_nominal_mujoco
 from sx_embodiments.parts import ChainSpec, GripperSpec, Limb
 
 from xmimic.embodiment_bundle import TrainingProfile, adapt_nominal_bundle
 from xmimic.retarget_source import ParseLimits, parse_soma_bvh
 from xmimic.retarget_target import IKConfig, Landmark, TargetKind, TargetProfile
 from xmimic.retarget_workflow import RetargetRecipe, SegmentTarget
+from xmimic.retarget_quality import NominalQuality
 
 EXPECTED_BODY = 'a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3'
 # Nominal anatomical correspondence: source +Z forward, +X left, +Y up.
@@ -99,11 +100,12 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
         'waist_rod_joint is fixed at zero as an explicit nominal mechanism projection.',
         'foot2 links are designated support links; sole offsets use their lowest source collision vertex at nominal pose.',
         'Source-derived URDF inertials are preserved, including their existing estimates; they are not measured dynamics.',
+        'Self collisions are disabled explicitly in this nominal ground-only simulation; no self-collision qualification.',
         'Ground is a rigid plane with nominal friction (1,0.005,0.0001); no contact calibration is claimed.',
     )
     preliminary = NominalProfile(str(body.id),joints,(('waist_rod_joint',0.),),tracked,
                   tuple(SupportContact(link,0.) for link in SUPPORTS),(0.,0.,0.),(1.,0.,0.,0.),
-                  .005,(0.,0.,-9.81),(1.,.005,.0001),assumptions)
+                  .005,(0.,0.,-9.81),(1.,.005,.0001),assumptions, CollisionMode.GROUND_ONLY)
     with tempfile.TemporaryDirectory(prefix='geometry-',dir=output) as scratch:
         bundle = Path(scratch)/'bundle'
         export_nominal_mujoco(body,preliminary,bundle)
@@ -160,7 +162,8 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
     recipe = RetargetRecipe(target,WORLD_FROM_SOURCE,'Hips',
                            tuple(tuple(row) for row in human_R.T),
                            tuple(float(v) for v in root_offset),root_scale,(),orientation_offsets,
-                           tuple((j.name,.15 if 'knee_joint' in j.name else (-.075 if 'hip_pitch_joint' in j.name else j.default_position)) for j in joints),IKConfig(max_iterations=60),tuple(segment_targets))
+                           tuple((j.name,.15 if 'knee_joint' in j.name else (-.075 if 'hip_pitch_joint' in j.name else j.default_position)) for j in joints),IKConfig(max_iterations=60),tuple(segment_targets),
+                           NominalQuality(.03,.01,SUPPORTS,.002,.05,4.,6.,.001))
     (output/'recipe.json').write_text(canonical_json(asdict(recipe)))
     (output/'training-profile.json').write_text(canonical_json(asdict(training)))
     (output/'nominal-profile.json').write_text(canonical_json(asdict(nominal)))

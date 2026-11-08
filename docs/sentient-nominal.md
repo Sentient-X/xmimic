@@ -116,3 +116,25 @@ chunk membership, order, sizes, per-chunk SHA-256 and complete-archive SHA-256.
 Reconstructing this archive is distinct from automatic runtime reattachment and
 still requires native configuration/body/source binding and pytree-template checks
 before training can continue. Policy NPZ files alone are not resumable training state.
+
+### Explicit nominal reference contract
+
+The original 599-frame solve remains rejected by its 2 mm optimization goal. A separately versioned nominal simulation contract now accepts at most 30 mm positional approximation and 0.01 rad orientation error while leaving that optimizer goal unchanged. This bound is an experimental motion-tracking choice, not a measured robot capability.
+
+`NominalQuality` retains every native joint sample and original source timebase in `candidate.npz`. It translates each whole pose vertically until the lowest designated foot collision geometry is 2 mm above the floor; a correction above 50 mm refuses. All robot collision geometry must remain above -1 mm. The reference clock is explicitly dilated by four, and the resulting discrete joint velocity must stay below 6 rad/s. Native coordinate bounds remain mandatory. The original optimizer result, original candidate, per-frame vertical corrections, new owner scene/profile hashes, and new reference timebase remain in the derived cache. No foot-contact labels, no-slip condition, balance result, or physical qualification are inferred.
+
+The owner exporter now records `CollisionMode.GROUND_ONLY` in this example's nominal profile: robot collision geometry has `contype=2, conaffinity=1`; the floor has `contype=1, conaffinity=2`. This avoids treating overlapping convex mesh approximations of fixed camera/shoulder structure as a qualified self-collision model. Source meshes, body identity, inertials, native limits, and hardware facts are unchanged. Legacy profiles without this field retain full collision behavior.
+
+The retained real SOMA candidate passed this nominal contract with 599/599 frames, maximum root correction 21.987 mm, minimum collision-geometry floor height 2 mm, maximum joint speed 4.7612 rad/s, maximum positional residual 23.863 mm, and maximum orientation residual 0.007526 rad. Its source rate remains 120.004800192 Hz; the reference is 30.001200048 Hz. This is reference preparation, not a trained-policy or physical-robot result.
+
+To reuse retained solver work without repeating IK:
+
+```bash
+python -m tools.qualify_retarget --source-cache /private/original-cache/key \
+  --recipe /private/nominal/recipe.json --robot /private/nominal/robot \
+  --cache /private/derived-cache --execution-ref retained-nominal-projection
+```
+
+The command refuses changes to source mapping or optimizer settings, verifies the original completed cache, and writes a distinct derived cache. The old rejection is immutable. `tools/render_retarget.py` renders source and reference with actual MuJoCo robot meshes, residuals and native joint-limit indicators; the video displays both source time and reference time. It is a kinematic replay, not a physics rollout.
+
+**Engineering hold (2026-11-08):** the user rejected the SO-101-headed development body for further learning promotion and requested restoration of the earlier humanoid head with human engineering review. The measurements above are preserved diagnostics of that superseded candidate, not authorization to train it or a qualification of its construction. No GPU training was performed for that candidate. The generic parser, projection, recovery and visualization mechanisms remain reusable after a reviewed body is selected.

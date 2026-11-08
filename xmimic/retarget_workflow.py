@@ -21,6 +21,8 @@ from sx_geometry import mat_to_quat
 from .artifact_cache import ArtifactCache, CacheIdentity, ClipDisposition, content_hash
 from .retarget_source import CONVERTER_VERSION, parse_soma_bvh
 from .retarget_target import IKConfig, TargetProfile, prepare_target, solve_sequence
+from .retarget_quality import NominalQuality, qualify_motion
+from .embodiment_bundle import verify_nominal_receipt
 from . import retarget_source, retarget_target, retarget_progress
 
 
@@ -64,8 +66,11 @@ class RetargetRecipe:
     initial_q: tuple[tuple[str, float], ...]
     solver: IKConfig
     segment_targets: tuple[SegmentTarget, ...] = ()
+    nominal_quality: NominalQuality | None = None
 
     def __post_init__(self):
+        if self.nominal_quality is not None and not isinstance(self.nominal_quality, NominalQuality):
+            raise ValueError('Explicit nominal quality contract required')
         object.__setattr__(self, 'segment_targets', tuple(self.segment_targets))
         if (not all(isinstance(t, SegmentTarget) for t in self.segment_targets)
                 or len({t.source for t in self.segment_targets}) != len(self.segment_targets)):
@@ -127,7 +132,8 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
                   execution_ref: str, shape_sha256: str | None = None,
                   stop_requested: Callable[[], bool] = lambda: False,
                   on_progress: Callable[[int, int], None] | None = None,
-                  on_checkpoint: Callable[[dict], None] | None = None) -> RetargetReceipt:
+                  on_checkpoint: Callable[[dict], None] | None = None,
+                  robot_dir: Path | None = None) -> RetargetReceipt:
     """Account for every source frame; only a fully feasible clip gets motion.npz.
 
     A rejected clip still retains its candidate coordinates and residuals. Neither
@@ -144,6 +150,14 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         raise ValueError("Initial state outside canonical bounds")
     if any(initial[n] != value for n, value in recipe.target.holds):
         raise ValueError("Initial state differs from explicit held coordinates")
+    nominal_scene = None
+    if recipe.nominal_quality is not None:
+        if robot_dir is None:
+            raise ValueError('Nominal quality projection requires an owner robot bundle')
+        owner_receipt = verify_nominal_receipt(robot_dir)
+        if owner_receipt['embodiment_id'] != str(body.id):
+            raise ValueError('Nominal bundle belongs to another body')
+        nominal_scene = owner_receipt['scene_sha256']
     source_sha = hashlib.sha256(source).hexdigest()
     source_shape = shape_sha256 or content_hash({"kind": "embedded_bvh_skeleton", "source_sha256": source_sha})
     solver_sha = content_hash({
@@ -152,6 +166,8 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         "workflow": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "progress": hashlib.sha256(Path(retarget_progress.__file__).read_bytes()).hexdigest(),
         "numpy": np.__version__, "converter": CONVERTER_VERSION,
+        "quality": hashlib.sha256(Path(__file__).with_name("retarget_quality.py").read_bytes()).hexdigest(),
+        "nominal_scene": nominal_scene,
     })
     identity = CacheIdentity(source_sha, source_shape, str(body.id), target.binding.urdf_sha256,
                              target.binding.sha256, solver_sha,
@@ -201,28 +217,42 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
                                   fps=clip.fps, initial_q=[initial[n] for n in target.binding.joint_names],
                                   orientations=orientations, config=recipe.solver,
                                   resume=journal.frames, on_frame=committed, stop_requested=stop_requested)
-        disposition = ClipDisposition.SUCCEEDED if sequence.feasible else ClipDisposition.REJECTED
+        candidate_arrays = {
+            "root_p": sequence.root_p, "root_quat": sequence.root_quat, "q": sequence.q,
+            "fps": np.asarray(sequence.fps), "joint_names": np.asarray(target.binding.joint_names),
+            "embodiment_id": np.asarray(str(body.id)),
+            "target_binding_sha256": np.asarray(target.binding.sha256),
+        }
+        projected_arrays, quality_report = candidate_arrays, None
+        accepted = sequence.feasible
+        if recipe.nominal_quality is not None:
+            projected_arrays, quality_report = qualify_motion(candidate_arrays, sequence.position_residual_m,
+                sequence.orientation_residual_rad, robot_dir, recipe.nominal_quality)
+            accepted = quality_report['accepted']
+        disposition = ClipDisposition.SUCCEEDED if accepted else ClipDisposition.REJECTED
         provenance = {"source_sha256": source_sha, "source_group": source_group,
                       "shape_sha256": source_shape, "frame_time_literal": clip.frame_time_literal,
                       "frame_count": clip.frame_count, "recipe": asdict(recipe),
-                      "geometric_result": sequence.provenance(), "training_admitted": False}
+                      "geometric_result": sequence.provenance(), "nominal_quality_result": quality_report,
+                      "optimizer_goal_passed": sequence.feasible, "training_admitted": False}
         # Private work lives under the caller's persistent cache, never an implicit /tmp cache.
         with tempfile.TemporaryDirectory(prefix="solver-", dir=entry.path) as scratch:
             directory = Path(scratch)
-            motion = directory / ("motion.npz" if sequence.feasible else "candidate.npz")
-            arrays = sequence.npz_arrays() if sequence.feasible else {
-                "root_p": sequence.root_p, "root_quat": sequence.root_quat, "q": sequence.q,
-                "fps": np.asarray(sequence.fps), "joint_names": np.asarray(target.binding.joint_names),
-                "embodiment_id": np.asarray(str(body.id)),
-            }
-            np.savez(motion, **arrays)
+            candidate = directory / "candidate.npz"
+            np.savez(candidate, **candidate_arrays)
+            artifacts = {candidate.name: candidate}
+            if accepted:
+                motion = directory / "motion.npz"
+                np.savez(motion, **projected_arrays)
+                artifacts[motion.name] = motion
             report = directory / "retarget.json"
             report.write_text(canonical_json(provenance))
+            artifacts[report.name] = report
             entry.settle_clip(clip_id, execution_ref, status=disposition,
-                              artifacts={motion.name: motion, report.name: report},
+                              artifacts=artifacts,
                               metadata={"source_group": source_group, "frames": clip.frame_count,
                                         "training_admitted": False},
-                              reason="" if sequence.feasible else "One or more frames exceeded geometric residual limits")
+                              reason="" if accepted else "One or more frames exceeded the explicit reference quality contract")
         return RetargetReceipt(identity.key, entry.complete(), disposition, False, entry.path)
 
 
@@ -240,6 +270,8 @@ def recipe_from_json(payload: bytes) -> RetargetRecipe:
     def invalid_constant(_):
         raise ValueError("Nonfinite recipe value")
     raw = json.loads(payload, object_pairs_hook=pairs, parse_constant=invalid_constant)
+    if isinstance(raw, dict) and 'nominal_quality' not in raw:
+        raw['nominal_quality'] = None  # Legacy recipes retain the optimizer-only gate.
     fields = set(RetargetRecipe.__dataclass_fields__)
     if not isinstance(raw, dict) or set(raw) != fields:
         raise ValueError("Retarget recipe fields differ from the supported artifact")
@@ -289,5 +321,80 @@ def recipe_from_json(payload: bytes) -> RetargetRecipe:
             numeric(value)
         segment_targets.append(SegmentTarget(**mapping))
     raw['segment_targets'] = tuple(segment_targets)
+    quality = raw['nominal_quality']
+    if quality is not None:
+        if not isinstance(quality, dict) or set(quality) != set(NominalQuality.__dataclass_fields__):
+            raise ValueError('Every nominal quality setting must be explicit')
+        raw['nominal_quality'] = NominalQuality(**quality)
     raw["solver"] = IKConfig(**raw["solver"])
     return RetargetRecipe(**raw)
+
+
+def qualify_cached_candidate(source_directory: Path, recipe: RetargetRecipe, robot_dir: Path,
+                             *, cache: ArtifactCache, execution_ref: str) -> RetargetReceipt:
+    """Apply a new explicit nominal contract to retained IK work without solving again.
+
+    Mapping, optimizer configuration and original source are immutable. This creates
+    a distinct derived cache containing the original candidate and report as well as
+    the projected reference and new contract. It never changes the old rejection.
+    """
+    from dataclasses import replace
+    source_directory = Path(source_directory)
+    document = json.loads((source_directory / 'manifest.json').read_bytes())
+    original_identity = CacheIdentity(**document['identity'])
+    if source_directory.name != original_identity.key or len(document['clips']) != 1 or not document['complete']:
+        raise ValueError('One complete retained source cache required')
+    clip_id = next(iter(document['clips']))
+    with ArtifactCache(source_directory.parent).entry(original_identity, [clip_id]) as original:
+        artifacts = original.document['clips'][clip_id]['artifacts']
+        if 'candidate.npz' not in artifacts or 'retarget.json' not in artifacts:
+            raise ValueError('Retained unprojected candidate and optimizer report required')
+        candidate_path = original.path / 'blobs' / artifacts['candidate.npz']['sha256']
+        report_path = original.path / 'blobs' / artifacts['retarget.json']['sha256']
+        original_report = json.loads(report_path.read_bytes())
+        original_recipe = recipe_from_json(canonical_json(original_report['recipe']).encode())
+        if recipe.nominal_quality is None or replace(recipe, nominal_quality=None) != replace(original_recipe, nominal_quality=None):
+            raise ValueError('Requalification cannot change mapping or optimizer settings')
+        if original_report['source_sha256'] != original_identity.source_sha256:
+            raise ValueError('Source identity differs from retained optimizer report')
+        owner = verify_nominal_receipt(robot_dir)
+        if owner['embodiment_id'] != original_identity.embodiment_id or owner['urdf_sha256'] != original_identity.urdf_sha256:
+            raise ValueError('Requalification cannot change canonical body facts')
+        source_manifest_sha = hashlib.sha256((source_directory/'manifest.json').read_bytes()).hexdigest()
+        identity = replace(original_identity,
+            solver_sha256=content_hash({'original_solver': original_identity.solver_sha256,
+                'quality_code': hashlib.sha256(Path(__file__).with_name('retarget_quality.py').read_bytes()).hexdigest(),
+                'requalification_code': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
+            settings_sha256=content_hash({'recipe': asdict(recipe), 'source_manifest_sha256': source_manifest_sha,
+                                         'nominal_scene_sha256': owner['scene_sha256']}))
+        with cache.entry(identity, [clip_id]) as entry:
+            if entry.document['complete']:
+                status = ClipDisposition(entry.document['clips'][clip_id]['status'])
+                return RetargetReceipt(identity.key, entry.complete(), status, True, entry.path)
+            with np.load(candidate_path, allow_pickle=False) as data:
+                arrays = {name: data[name].copy() for name in data.files}
+            if len(arrays['q']) != original_report['frame_count']:
+                raise ValueError('Retained candidate frame count differs')
+            geometric = original_report['geometric_result']
+            projected, quality_report = qualify_motion(arrays, geometric['position_residual_m'],
+                geometric['orientation_residual_rad'], robot_dir, recipe.nominal_quality)
+            disposition = ClipDisposition.SUCCEEDED if quality_report['accepted'] else ClipDisposition.REJECTED
+            report = {**original_report, 'recipe': asdict(recipe), 'nominal_quality_result': quality_report,
+                'optimizer_goal_passed': all(x == 'geometrically_feasible' for x in geometric['dispositions']),
+                'retained_solver_manifest_sha256': source_manifest_sha, 'training_admitted': False}
+            entry.start_clip(clip_id, execution_ref)
+            with tempfile.TemporaryDirectory(prefix='qualification-', dir=entry.path) as temporary:
+                directory = Path(temporary)
+                output_report = directory/'retarget.json'
+                output_report.write_text(canonical_json(report))
+                output_files = {'candidate.npz': candidate_path, 'retarget.json': output_report,
+                                'original-retarget.json': report_path}
+                if quality_report['accepted']:
+                    motion = directory/'motion.npz'
+                    np.savez(motion, **projected)
+                    output_files['motion.npz'] = motion
+                entry.settle_clip(clip_id, execution_ref, status=disposition, artifacts=output_files,
+                    metadata={'source_group': original_report['source_group'], 'frames': len(arrays['q']),
+                              'training_admitted': False, 'retained_solver_manifest_sha256': source_manifest_sha},
+                    reason='' if quality_report['accepted'] else 'Nominal reference quality contract exceeded')
+            return RetargetReceipt(identity.key, entry.complete(), disposition, False, entry.path)
