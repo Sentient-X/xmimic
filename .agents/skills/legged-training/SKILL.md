@@ -909,3 +909,98 @@ Stop on physics warnings, unsupported mobility/joints/aperture law or failed own
 admission. Do not tune thresholds after seeing scores, admit failed human retargets,
 claim native scores from CPU adaptations, or count cached source acquisition as a
 completed GPU baseline. Update actual native receipts separately when they exist.
+
+### Audit reward fidelity before extending a matched cohort
+
+On 2026-11-08 the `vector-million-v1` cohort was interrupted after a counterexample
+in the adaptation's objective, not because upstream PolicyIK or XMimic had been
+shown to fail. Preserve its source checkout `bcae2a6`, request and all numeric
+checkpoints. Coverage: DLS8/8; coarse PPO, precision PPO and coarse WM each completed
+three seeds at500updates and held0/24; combined seed0 completed and held3/8, seed1
+stopped at checkpoint232, seed2 was not run. This is **not a complete cohort**.
+Combined seed0 terminal medians0.425/0.352mm and0.153/0.111degrees are useful partial
+evidence, but its worst second-hand position8.316mm and orientation1.917degrees
+miss strict holding. Do not suppress that positive result or turn it into a
+non-regression/promotion claim. Exact paths are in
+`data/stationary-benchmark/vector-million-v1-interruption.json`.
+
+The frozen scalar-coordinate Gaussian mean rewarded sacrificing one axis:
+(20,20,0)mm→(35,0,0)mm increases Euclidean error28.284→35mm while precision reward
+rises0.859759→0.928572 with other terms equal. It also depends on world-axis choice.
+The TRAIN-only audit replays4096transitions from three seed0/update500 cells,
+verifies checkpoint leaves and recomputes recorded reward within1.8e-7. All scalar
+position errors>=5cm had objective derivatives<1e-6/m. Full native-q gradients were
+not zero; these are not measured PPO optimizer gradients. The helper does not
+step physics, optimize, or read evaluation transitions.
+
+```bash
+# Preconditions: persistent owner83f32c4 and exact compatible sx-actions,
+# sx-geometry/sx-contracts on PYTHONPATH; the frozen checkout still retained.
+python data/stationary-benchmark/objective-audit-v1/audit.py
+python -m pytest -q tests/test_urr_reward.py tests/test_urr_benchmark.py \
+  tests/test_urr_vector.py tests/test_urr_learning.py
+```
+
+The audit helper prepends the historical checkout and verifies its source hashes,
+so newer core code cannot silently change the audit. `results.json`, `REPORT.md`
+and `reproduction.log` record actual outputs and source links. Review actual pinned
+PolicyIK22f3a5c `tasks/env_cfg.py`, `mdp.py`, `actions.py` plus inherited OpenArm
+bad82e23 terms and IsaacLab2.3.2 dt integration; an observation scale is not a
+reward width. Native XMimic8f7693f uses whole-body vector tracking, model rollout
+losses, critic/bootstrap/termination and optimization machinery absent here.
+
+Source-term correction `cd3eb346da11388ed26d5feaceacc9628fa7bd97` passed37focused
+checks. It uses Euclidean position and three centred45cm virtual keypoints, literal
+source weights/widths, transition-based precision shaping with first/changed-goal
+reset, exact source gain ramps, native-normalized margin cost and control-dt scaling.
+The aperture position pair and global multi-role ratio are documented extensions;
+no source-native gripper reward is invented. Existing normalized action-rate cost
+remains; do not copy radian velocity costs onto metre-valued slides. World-frame
+observation features, native action scales/governor and small learner architecture
+remain labelled adaptations. Neither numerical source agreement nor tests prove a
+learning gain. The subsequent zero-aperture follow-up replaces scalar abs by the
+safe scalar norm in reward/ratio and tests exact-zero gradients plus two-sided
+descent through affine/curved owner laws; track that validation separately.
+
+A new objective requires a new frozen code/request/run. Never change old evaluation
+bytes, widen thresholds, tune weights on development scores while calling them
+source-derived, resume old checkpoints under altered semantics, or infer native
+failure from an adapter. A short TRAIN-only stability pilot precedes any newly
+approved cohort; it is not permission to run another full cohort automatically.
+Strict per-role continuous acceptance remains authoritative even when reward rises.
+
+| Observed failure | Cause | Correction / stop condition |
+| --- | --- | --- |
+| Reward rises while Euclidean pose worsens | Mean of narrow scalar-axis kernels rewards sacrificing coordinates | Literal source vector/keypoint terms; common-frame invariance and analytic counterexample regression |
+| Far positional error gets negligible direct reward slope |1cm observation scale was reused as tracking kernel width | Source negative distance and .20/.05m keypoint kernels; inspect TRAIN replay gradients without claiming PPO gradient collapse |
+| Precision progress/dwell differs from source | Linear best-ratio improvement and growing dwell were substitutes | Exact utility/potential/backslide/binary dwell with explicit transition/reset state |
+| Exact-goal aperture gradient pushes away from target | JAX scalar abs chooses a nonzero derivative at zero | Safe scalar norm with exact-zero and positive/negative error regressions |
+| Single successful combined seed becomes a whole-cohort claim | Partial cohort coverage and worst-role errors hidden by medians | Retain every cell status, worst errors and unchanged held-pose rule; incomplete remains inconclusive |
+
+### Preserve completed screening evidence through Catalog
+
+Verified first screening pack:
+`xmimic.benchmarks.stationary.screening-v1.ec27776bf3b8`, project
+`b98ba48a-39c1-4346-98a4-d9c130144a42`, manifest
+`69663086f02ba41de14c2b87e740c33bef7916a8f1dcc77e05454e8151898e47`.
+Complete readback verified8objects/54,948,901bytes covering1,937logical files:
+prepared body/assets, all task/training results, latest complete recovery checkpoint
+per learned cell, whole historical checkout, owner source/licenses and measured v3
+visuals. This receipt covers the **first screening only**, not the interrupted
+million-transition cohort. All older local checkpoints remain intact.
+
+`tools/publish_urr_benchmark.py` uses existing CatalogPublisher.publish_files and
+restore_pack. The actual receipt is
+`data/stationary-benchmark/screening-v1-catalog/publication-receipt.json`;
+transport/publication.json retains the upload/registration operation identities.
+Manifest purpose EVALUATION and training_eligible=false are mandatory; evidence
+publication is not Catalog learning admission. No direct R2 SDK or new bucket.
+
+Reproducing publication needs the merged sx_training ArtifactPurpose.EVALUATION
+owner and existing approved private-project credentials. Never print credentials.
+Use a fresh derived preparation directory for new evidence; attach the original
+journal for the same immutable evidence. Stop on changed hashes, incomplete cells,
+manifest-purpose mismatch, unknown service outcome or archive larger than1GiB;
+shard explicitly before any new publication. Preserve licensed source and exact
+logical archive inventories, including empty source files. Verify readback before
+claiming durable evidence. This procedure does not authorize a new training run.
