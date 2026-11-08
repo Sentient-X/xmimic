@@ -1086,3 +1086,17 @@ discard its durable `transport/publication.json` to retry accepted work. The slo
 laptop readback completed without a second publication or alternate R2 transport.
 Private storage of the do_not_promote result establishes evidence custody, not
 policy acceptance, native upstream scores or permission to train on evaluation.
+
+First native managed Job `ftjob_4c0c0bece5664eedb6eae8f3c922c496` was accepted
+2026-11-08T16:33:57Z ($8/3600s), then failed before the upstream child/optimizer.
+The SDK rejected a symlink ancestor of the artifact directory; no precise live
+symlink target was observable after termination. Sanitized Temporal history proves
+launch heartbeat timeout120s; the old dispatcher also bought3 bootstrap recovery
+generations without a checkpointed-interruption acknowledgement. Public Watch
+straddled the terminal transition and refused an inconsistent failure snapshot;
+the database's failure itself was complete. These are platform execution failures,
+not native learning scores. Preserve attempt/provider/cost evidence under
+`runtime-grants-rollout-v1`, fix the complete owner boundary set, rebuild immutable
+images, verify exact grants and serving source, then make a separately bound
+corrected attempt. Never retry an ambiguous native paid child or treat acquisition,
+image publication or an accepted Job as completed training.

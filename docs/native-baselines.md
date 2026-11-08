@@ -77,6 +77,30 @@ This proves input custody, not completed native training or evaluation. Submit o
 through the existing authored training Job API/CLI with the correct purpose,
 immutable image, explicit idempotency key, deadline and spending cap.
 
+## First managed launch evidence
+
+The production dispatcher was qualified on source `1061ded` with the exact private
+runtime grants and migration `0019`. H100 Job
+`ftjob_4c0c0bece5664eedb6eae8f3c922c496` was accepted on 2026-11-08 at 16:33:57 UTC,
+with an $8 cap, 3,600-second deadline and the original 3,500-iteration protocol.
+Its retained attempt ended failed at 16:50:03 UTC. No upstream training command or
+optimizer ran, and no native score was produced.
+
+The runtime's stderr rejects symlinks above the staged artifact root before source
+access. Temporal history independently records a 120-second launch heartbeat
+timeout; the old dispatcher then repeated the bootstrap failure through three
+recovery generations. The public Watch reader also refused an inconsistent failure
+snapshot. The stored failure itself is complete (`execution_failed`, nonretryable).
+The exact provider symlink component could not be inspected after termination.
+
+Retained evidence is under
+`data/native-baselines/runtime-grants-rollout-v1/`: sanitized Temporal history,
+native attempt facts, diagnosis, and private provider logs. The reviewed corrections
+address trusted mount boundaries, slow-launch custody, explicit checkpointed recovery
+and atomic operation snapshots. Corrected hosted execution remains unverified until
+new validated immutable runtime images and their exact grants are serving. Preserve
+this failed Job and its costs; do not silently relabel or resubmit its idempotency key.
+
 After a native XMimic training Job succeeds, run the same preparation command with
 `--training-job-id <retained Job ID>`. The helper reads that Job and its immutable
 owner result, verifies the original input pack, complete 35-checkpoint inventory and
