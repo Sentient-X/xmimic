@@ -92,3 +92,11 @@ exact public readbacks; absent or conflicting state refuses rather than resubmit
 Keep the original input publication journal and the composition directory. Seventeen
 local helper tests cover integrity, full-checkpoint refusal and acknowledgement-loss
 recovery; hosted composition and native evaluation still need their own receipts.
+
+Managed volume roots may be provider aliases. Native custody uses the shared
+`sx_training.paths.rooted_path` check below `context.run_dir`, preserving the logical
+path in command journals. A different physical target for the same remounted volume
+must not change command identity or rerun a completed child. Links inside the staged
+source, output or checkpoint closure remain refused. The runtime image must contain
+this same SDK contract; its installation proof reads an admitted file through linked
+mount roots before any native GPU attempt is made.

@@ -167,7 +167,7 @@ def test_native_paid_child_is_never_reexecuted_after_result_or_failure(
     ).read_text() == "Native command stdout/stderr follows\nnative stdout\n"
 
 
-def managed_fixture(tmp_path, monkeypatch, child):
+def managed_fixture(tmp_path, monkeypatch, child, *, linked_mounts=False):
     import json
     import sys
     import tools.benchmark_native as native
@@ -176,6 +176,11 @@ def managed_fixture(tmp_path, monkeypatch, child):
     from sx_training.artifacts import ArtifactFile, ArtifactManifest, ArtifactPurpose
 
     selected = source(tmp_path, [("script.py", tarfile.REGTYPE, child.encode())])
+    if linked_mounts:
+        for name in ("data", "runs", "cache"):
+            physical = tmp_path / "provider-targets" / name
+            physical.mkdir(parents=True)
+            (tmp_path / name).symlink_to(physical, target_is_directory=True)
     data = tmp_path / "data"
     (data / "inputs").mkdir(parents=True)
     archive = data / "inputs/source.tar.gz"
@@ -345,10 +350,10 @@ def test_interrupted_artifact_copy_resumes_without_executing_paid_child(
     original = native._write_exact
     with monkeypatch.context() as interrupted:
 
-        def fail_second_publication(path, payload):
+        def fail_second_publication(path, payload, **kwargs):
             if path.parent.name == "native-publication" and path.name == "result":
                 raise OSError("publication interrupted")
-            return original(path, payload)
+            return original(path, payload, **kwargs)
 
         interrupted.setattr(native, "_write_exact", fail_second_publication)
         with pytest.raises(OSError, match="publication interrupted"):
@@ -415,3 +420,39 @@ def test_unknown_temporary_name_is_not_ignored(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="staging changed"):
         execute(context)
     assert (staging / ".native-write-unbound").read_text() == "unknown"
+
+
+def test_native_custody_survives_provider_mount_aliases_and_target_rebinding(
+    tmp_path, monkeypatch
+):
+    from sx_training import TrainingContext, execute, execution_bytes, verify_receipt
+    from sx_contracts.identity import content_digest
+    import subprocess
+
+    context = managed_fixture(tmp_path, monkeypatch, SUCCESS_CHILD, linked_mounts=True)
+    artifact = execute(context)
+    verify_receipt(artifact, spec_digest=content_digest(context.inputs["spec"]))
+    assert context.run_dir.parent == tmp_path / "runs"
+    assert context.cache_dir == tmp_path / "cache"
+    journal = (context.run_dir / "native-steps/000.json").read_bytes()
+    assert str(tmp_path / "runs").encode() in journal
+    assert b"provider-targets" not in journal
+    # A new Sandbox can bind the same durable volume at a different physical target.
+    old_target = (tmp_path / "runs").resolve()
+    new_target = old_target.with_name("next-generation-runs")
+    old_target.rename(new_target)
+    (tmp_path / "runs").unlink()
+    (tmp_path / "runs").symlink_to(new_target, target_is_directory=True)
+    resumed = TrainingContext(
+        execution_bytes(context.inputs, context.trainer),
+        data_root=context.data_root,
+        cache_dir=context.cache_dir,
+        runs_dir=tmp_path / "runs",
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Paid native command must not rerun")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    assert execute(resumed) == artifact
+    assert (resumed.run_dir / "native-steps/000.json").read_bytes() == journal

@@ -200,7 +200,7 @@ def compose_evaluation(
     from dataclasses import asdict
     from sx_training.artifacts import artifact_manifest_from_bytes
     from sentientx.sx.autonomy.train.v1 import training_pb2
-    from sentientx.sx.experience.catalog.v1 import sources_pb2
+    from sentientx.sx.experience.catalog.v1 import library_pb2, sources_pb2
     from xmimic.artifact_cache import _atomic, content_hash
 
     if job.status != training_pb2.TRAINING_JOB_STATUS_SUCCEEDED:
@@ -433,7 +433,7 @@ def compose_evaluation(
                     entry=entry,
                     parents=[
                         sources_pb2.LineageParent(
-                            entry=p, supplied=["LINEAGE_SUPPLIED_REFERENCE"]
+                            entry=p, supplied=[library_pb2.LINEAGE_SUPPLIED_REFERENCE]
                         )
                         for p in sorted(parents)
                     ],
@@ -463,7 +463,11 @@ def compose_from_live_job(
     import httpx
     from sentientx.sx.autonomy.train.v1 import training_connect, training_pb2
     from sentientx.sx.common.v1 import common_pb2
-    from sentientx.sx.experience.catalog.v1 import sources_connect, sources_pb2
+    from sentientx.sx.experience.catalog.v1 import (
+        library_pb2,
+        sources_connect,
+        sources_pb2,
+    )
     from sx._transport import ConnectionProfile, Endpoints
     from sx_service.registry import AUTONOMY
     from xmimic.artifact_cache import content_hash
@@ -529,7 +533,8 @@ def compose_from_live_job(
             return {
                 labels[edge.parent]
                 for edge in result.edges
-                if edge.child == result.subject.ref and 4 in edge.supplied
+                if edge.child == result.subject.ref
+                and library_pb2.LINEAGE_SUPPLIED_REFERENCE in edge.supplied
             }
 
         return compose_evaluation(

@@ -366,14 +366,13 @@ def require_purpose(method, phase, manifest):
         raise ValueError("Native evaluation requires EVALUATION and false eligibility")
 
 
-def _regular_tree(root):
+def _regular_tree(root, *, boundary):
     """Reject aliases/special files before reading or writing retained custody."""
     import stat
 
-    root = Path(root)
-    for parent in (root, *root.parents):
-        if parent.is_symlink():
-            raise ValueError("Native managed path contains a link")
+    from sx_training.paths import rooted_path
+
+    root = rooted_path(boundary, Path(root).relative_to(boundary))
     if not root.exists():
         return {}
     if not root.is_dir():
@@ -395,10 +394,10 @@ def _pending_write(path, sha256):
     return path.with_name(f".native-write-{name_hash}-{sha256}")
 
 
-def _reconcile_writes(root, expected):
+def _reconcile_writes(root, expected, *, boundary):
     import os
 
-    files = _regular_tree(root)
+    files = _regular_tree(root, boundary=boundary)
     for name, sha256 in expected.items():
         destination = root / name
         temporary = _pending_write(destination, sha256)
@@ -413,21 +412,20 @@ def _reconcile_writes(root, expected):
         else:
             os.link(temporary, destination)
         temporary.unlink()
-    return _regular_tree(root)
+    return _regular_tree(root, boundary=boundary)
 
 
-def _write_exact(path, payload):
+def _write_exact(path, payload, *, boundary):
     import os
 
-    path = Path(path)
-    for parent in (path, *path.parents):
-        if parent.is_symlink():
-            raise ValueError("Native managed path contains a link")
+    from sx_training.paths import rooted_path
+
+    path = rooted_path(boundary, Path(path).relative_to(boundary))
     sha256 = hashlib.sha256(payload).hexdigest()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = _pending_write(path, sha256)
     if temporary.exists() or temporary.is_symlink():
-        _reconcile_writes(path.parent, {path.name: sha256})
+        _reconcile_writes(path.parent, {path.name: sha256}, boundary=boundary)
     if path.exists():
         if not path.is_file() or path.read_bytes() != payload:
             raise ValueError("Native retained bytes changed")
@@ -469,9 +467,9 @@ def _publish_native(context, output):
     """Atomically expose exact completed bytes at the owner's required artifact root."""
     import os
 
-    expected = _regular_tree(output)
+    expected = _regular_tree(output, boundary=context.run_dir)
     artifact = context.run_dir / "artifact"
-    current = _regular_tree(artifact)
+    current = _regular_tree(artifact, boundary=context.run_dir)
     # Only the owner execute() receipt is outside authored output identity.
     from sx_training import RECEIPT
 
@@ -482,13 +480,15 @@ def _publish_native(context, output):
             raise ValueError("Native published output changed")
         return artifact
     staging = context.run_dir / "native-publication"
-    retained = _reconcile_writes(staging, expected)
+    retained = _reconcile_writes(staging, expected, boundary=context.run_dir)
     if any(expected.get(name) != sha for name, sha in retained.items()):
         raise ValueError("Native publication staging changed")
     staging.mkdir(exist_ok=True)
     for name in expected:
-        _write_exact(staging / name, (output / name).read_bytes())
-    if _regular_tree(staging) != expected:
+        _write_exact(
+            staging / name, (output / name).read_bytes(), boundary=context.run_dir
+        )
+    if _regular_tree(staging, boundary=context.run_dir) != expected:
         raise ValueError("Native publication inventory differs")
     os.rename(staging, artifact)
     return artifact
@@ -520,7 +520,7 @@ def run(context):
         context.run_dir / "artifact",
         context.run_dir / "native-publication",
     ):
-        _regular_tree(directory)
+        _regular_tree(directory, boundary=context.run_dir)
     payloads = archived_files(archive, selected.directory)
     if method is NativeMethod.XMIMIC:
         for row in payloads["tools/data_sha256.txt"].decode().splitlines():
@@ -538,13 +538,15 @@ def run(context):
     expected_source = {
         name: hashlib.sha256(value).hexdigest() for name, value in payloads.items()
     }
-    retained_source = _reconcile_writes(source, expected_source)
+    retained_source = _reconcile_writes(
+        source, expected_source, boundary=context.run_dir
+    )
     if any(expected_source.get(name) != sha for name, sha in retained_source.items()):
         raise ValueError("Native source has modified or unrecorded files")
     source.mkdir(exist_ok=True)
     for name, payload in payloads.items():
-        _write_exact(source / name, payload)
-    if _regular_tree(source) != expected_source:
+        _write_exact(source / name, payload, boundary=context.run_dir)
+    if _regular_tree(source, boundary=context.run_dir) != expected_source:
         raise ValueError("Native source inventory differs")
     output.mkdir(exist_ok=True)
     initial = {}
@@ -566,7 +568,7 @@ def run(context):
                 or not filename.endswith(".npz")
             ):
                 raise ValueError("Unexpected native checkpoint member")
-            _write_exact(output / filename, path.read_bytes())
+            _write_exact(output / filename, path.read_bytes(), boundary=context.run_dir)
             initial[filename] = digest(path)
     interpreter = (
         "/opt/policyik/.venv/bin/python"
@@ -587,7 +589,7 @@ def run(context):
         env["PYTHONPATH"] = str(source)
         env["JAX_COMPILATION_CACHE_DIR"] = str(context.cache_dir / "native-jax")
     records.mkdir(exist_ok=True)
-    record_files = _regular_tree(records)
+    record_files = _regular_tree(records, boundary=context.run_dir)
     allowed_records = {f"{number:03d}.json" for number in range(len(commands))}
     if not record_files.keys() <= allowed_records:
         raise ValueError("Native journal contains unrecorded files")
@@ -636,8 +638,9 @@ def run(context):
         _reconcile_writes(
             output,
             {"native-provenance.json": hashlib.sha256(provenance_bytes()).hexdigest()},
+            boundary=context.run_dir,
         )
-    actual = _regular_tree(output)
+    actual = _regular_tree(output, boundary=context.run_dir)
     provenance = actual.pop("native-provenance.json", None)
     if actual != expected_output:
         raise ValueError("Native completed output changed or contains unrecorded files")
@@ -654,7 +657,9 @@ def run(context):
         if context.stopping:
             raise RuntimeError("Native execution stopped before a new child command")
         _write_exact(
-            receipt, canonical_json({"intent": intent, "state": "started"}).encode()
+            receipt,
+            canonical_json({"intent": intent, "state": "started"}).encode(),
+            boundary=context.run_dir,
         )
         with (output / f"step-{number:03d}.log").open("xb") as log:
             log.write(b"Native command stdout/stderr follows\n")
@@ -687,16 +692,20 @@ def run(context):
                 _terminate_group(child)
             log.flush()
             os.fsync(log.fileno())
-        files = _regular_tree(output)
+        files = _regular_tree(output, boundary=context.run_dir)
         if any(files.get(name) != sha for name, sha in expected_output.items()):
             raise ValueError("Native step rewrote previously completed output")
-        if _regular_tree(source) != expected_source:
+        if _regular_tree(source, boundary=context.run_dir) != expected_source:
             raise ValueError("Native command changed immutable source")
         record = {"intent": intent, "state": "complete", "files": files}
         temporary = receipt.with_suffix(".complete")
-        _write_exact(temporary, canonical_json(record).encode())
+        _write_exact(
+            temporary, canonical_json(record).encode(), boundary=context.run_dir
+        )
         os.replace(temporary, receipt)
         expected_output = files
         completed.append(record)
-    _write_exact(output / "native-provenance.json", provenance_bytes())
+    _write_exact(
+        output / "native-provenance.json", provenance_bytes(), boundary=context.run_dir
+    )
     return _publish_native(context, output)
