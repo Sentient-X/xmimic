@@ -343,3 +343,27 @@ subsequent quality-projection changes passed 191 tests and 44 subtests. GPU metr
 are forwarded to nonblocking Waddle logging and retained as final CSV/JSON artifacts;
 JAX, Warp and CUDA caches use the managed job's persistent cache directory. These
 are implementation facts; no hosted GPU training or successful policy is established.
+
+### URDF-to-MuJoCo rotation correction and original-head review
+
+The first exporter used `eulerseq="xyz"`, which is intrinsic in MuJoCo, while URDF
+RPY is extrinsic. At mixed angles (0.2,0.3,0.4), the rotation-matrix error reached
+0.1195965; `XYZ` matched the embodiment FK to numerical precision. This corrupted
+link and mesh placement, including a protruding battery that belonged inside the
+chest. The exporter must use radians and uppercase `XYZ`. Consumer admission now
+requires owner receipt v2 and `urdf-rpy-extrinsic-XYZ`, verifies the scene compiler,
+and rejects older nominal bundles. Regenerate from exact canonical body + profile;
+retain old receipts/caches as diagnostics, never silently relabel their physics.
+Earlier nominal floor-clearance and collision conclusions using that exporter are
+invalid. Pure source/URDF IK evidence is separate. No GPU run used those artifacts.
+
+The original head restore is composition commit `5975a9de6390c64087d762ee0eea6344de8aa959`
+in embodiments PR267. It uses `HEAD_MODULE` and `UPPER_BODY_MODULE.socket("neck")`,
+removing the static body's SO101/ZED head and inferred shoulder-midpoint placement.
+The resulting draft has33controlled coordinates; its two original head joints have
+no invented drive binding. Nineteen head/assembly/asset checks passed. The actual
+engineering renders instead evaluate owner `Kinematics` and convert each visual
+origin to a quaternion, show only `<visual>` geometry, and label zero display poses.
+The human review package is retained under `data/bones_seed/engineering-head-review`;
+`candidate/view-relative.urdf` changes only mesh URIs, with joint/inertial XML checked
+unchanged. It is a review draft, not physical or training approval.
