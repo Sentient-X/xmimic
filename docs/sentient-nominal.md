@@ -1,147 +1,128 @@
 # Nominal Sentient simulation and SOMA retargeting
 
-`examples/sentient_nominal.py` generates an explicit development experiment for the
-39-coordinate Sentient body. `tools/prepare_embodiment_job.py` is the generic input
-preparer: it accepts another supported canonical body with that body's explicit
-nominal simulation profile, retarget recipe and training profile. Neither tool
-submits jobs, admits training data, downloads motion archives or operates hardware.
+The owner approved the restored-head, restored-shoulder assembly for **nominal
+simulation testing** on 2026-11-08. The experiment uses 33 controlled coordinates,
+explicit nominal servo assumptions and ground-only collisions. It does not supply
+measured actuator facts, physical qualification or a trained policy.
 
-## Exact body and portable ownership
+## Exact inputs
 
-The example binds body identity
-`a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3`
-and URDF SHA-256
-`a999ac459a8214ae4d70c213917ae337583c6e9e03bd4be94d7630debe213cd3`.
-It refuses a changed body until its experimental assumptions are reviewed.
+- Body: `ca3fb7c3b69a4df643d21904d64b57c7d954c536dbb70660143d75133e53f317`.
+- URDF: `e7fd42a06794c5d3fce549e55630ea0a9194eee04411b7f06a9d7ed5ada87e67`.
+- Owning source snapshot: `a5528ec576615cde3e0c6645b2a4fd548b72e942`, combining
+  assembly `a01160b` with the corrected v2 exporter from `5780529`.
+- Nominal profile: `333ed58a2cf7720b3c4afeaf80ca43ca6ff584a7d82d26774c5c1323ba87cf1a`.
+- Scene: `c691cdbb034c4408854cbd14641c7fad22657f2c19b1c95a508e744e7f86c542`.
+- Complete SOMA source: `a81ff5609be1bd6f1733059740a4116f7c630326331141335f42b1e1544e93b2`,
+  599 frames, literal frame time `0.008333`, from the privately mirrored BONES-SEED
+  revision `2f59b2077b9da34dd4e43618e705c7cb962c9a66`.
 
-The generic exporter belongs to `sx_embodiments.nominal_mujoco`. Portable decoding,
-retarget target preparation and full nominal export of this 39-coordinate document
-were tested against exporter commit
-`96aabf07e16427d2c8e0006984cdd8d6d7e2d7cc`, based on
-`93141cd990c5347e2985801dda49d9f5de4bd535`. The corrected body is supplied as its
-canonical document and verified asset closure; this does not claim that the older
-registry definition at that base revision is the corrected body. Worker images must
-ship the owning exporter commit. A laptop-only module overlay is not a release.
+The body and source are portable, hash-bound inputs. Neither a registry alias nor
+an installed older embodiment package is a substitute. Exporter `5780529` alone
+predates the restored shoulder assets; use the coherent owning source above.
+Runtime images still require publication with compatible owning source.
 
-## Explicit experimental assumptions
+## Explicit assumptions
 
-- The canonical URDF geometry and inertials are preserved. Their existing estimates
-  remain estimates; no dynamics measurements are invented.
-- PD gains, effort bounds, armatures and action scales are experimental choices by
-  component role. They do not establish actuator ratings or hardware control gains.
-- The waist rod is held at zero. Torso, waist, neck and fingers have explicit holds
-  during this geometric retarget experiment. The nominal simulation starts at the
-  nearest bounded zero; IK uses a small knee/hip bend as its initial seed.
-- The two `foot2` links are designated supports. Their lowest collision vertices
-  give approximately 49.5 mm sole offsets. The initial root height of approximately
-  0.68784 m gives the lowest designated sole 10 mm clearance above the plane.
-- Source centimetres become metres. The source-to-world basis and first-frame
-  root/foot orientation calibration are explicit **nominal correspondences**.
-  They are not inferred physical calibration facts.
-- Target limb lengths and shoulder/hip anchors come from canonical target FK.
-  Source upper/lower limb vectors are normalized to those lengths. BVH translation
-  channels replace `OFFSET`, so the source's actual first-frame positions provide
-  the source leg-length measurement used for root translation scaling.
-- The recipe tracks wrist/ankle positions and calibrated ankle orientations.
-  Collision, balance, foot planting, force feasibility and physical qualification
-  remain separate checks.
+The source URDF geometry and inertials remain intact, including their documented
+estimates. Experimental gains, effort bounds, armatures and action scales are
+chosen by component role. They are not hardware ratings or calibrated gains.
+The waist rod, neck yaw and head pitch are explicitly held at zero; no original-head
+drive binding is invented. The initial pose is bounded zero, not a calibrated
+standing pose. The IK seed uses a small knee/hip bend.
 
-The example is clip-calibrated. Its initial source posture is a declared calibration
-choice, not a universal anatomical rest pose or a proven recipe for the full corpus.
-Thresholds stay at 2 mm position residual and 0.01 rad orientation residual.
+The two `foot2` links designate support geometry. Source centimetres become metres;
+source axes and first-frame root/foot correspondence are explicit nominal choices.
+Canonical limb lengths normalize the source segments. Each clip's first posture is
+a declared calibration choice, not a universal recipe for the entire corpus.
 
-## Prepare private inputs
+The optimizer still targets 2 mm and 0.01 rad. A separately declared nominal
+reference contract permits up to 30 mm position error, 0.01 rad orientation error,
+6 rad/s joint speed and a 50 mm whole-pose vertical correction. It puts the lowest
+support geometry 2 mm above the floor and requires all collision geometry above
+-1 mm. The reference clock is slowed by four; original coordinates, timebase,
+residuals and per-frame corrections remain retained. Self collisions are disabled
+explicitly. No foot-contact labels, no-slip or balance guarantee is inferred.
 
-Run from the XMimic checkout with its dependencies and the pinned owning exporter
-installed. Set `SX_EMBODIMENTS_ASSETS` to the verified portable canonical asset tree
-when the body is not installed in the local asset store.
+## Reproduce preparation and diagnostics
+
+Install the exact owning source and set `SX_EMBODIMENTS_ASSETS` to the verified
+portable asset tree. From XMimic:
 
 ```sh
 python -m examples.sentient_nominal \
   --embodiment-document /private/body/embodiment.json \
-  --source /private/source.bvh \
-  --output /private/experiment
+  --source /private/source.bvh --output /private/profile
 
 python -m tools.prepare_embodiment_job \
   --embodiment-document /private/body/embodiment.json \
   --source /private/source.bvh \
-  --nominal-profile /private/experiment/nominal-profile.json \
-  --recipe /private/experiment/recipe.json \
-  --training-profile /private/experiment/training-profile.json \
-  --source-entry datasets.bones-seed.2f59b2077b9d \
-  --output /private/prepared-job
+  --nominal-profile /private/profile/nominal-profile.json \
+  --recipe /private/profile/recipe.json \
+  --training-profile /private/profile/training-profile.json \
+  --source-entry datasets.bones-seed.2f59b2077b9d --output /private/input
+
+python -m tools.diagnose_nominal \
+  --robot /private/input/robot --output /private/pd-baseline --seconds 2
 ```
 
-The preparer copies the complete verified owning asset closure, exports the nominal
-model, derives XMimic metadata, and records source/body/profile identities. The
-source entry is a declared lineage reference; Catalog verifies authority and lineage
-when it admits the managed inputs. Preparation alone does not establish feasibility
-or training eligibility.
+The diagnostic saves every physics state, controls, forces, contact distances,
+warnings and input hashes before rendering. It uses constant owner-profile position
+targets and never tunes away a fall. It is not a learned controller. Use new derived
+output directories; the tool refuses existing outputs and paths under `raw/`.
 
-The managed CPU worker consumes these files and the explicit metadata-resolved
-source family. Successful geometry produces a `training-candidate.json` transform
-manifest whose eligibility is inherited from the input. Rejected clips retain all
-candidate coordinates and residuals, and produce no training candidate. Catalog's
-training-use admission remains authoritative for source ancestry and held-out data.
+`xmimic.retarget_workflow.retarget_clip` is the shared local/managed CPU solver.
+Give it the exact body, source, recipe, robot bundle, source-family identity,
+execution reference and `ArtifactCache`; every frame is durably accounted for.
+The [managed workflow](managed-training.md) publishes and schedules it through the
+platform. To inspect one completed cache:
 
-## Observed complete-clip result
+```sh
+python -m tools.render_retarget \
+  --source /private/source.bvh --recipe /private/input/recipe.json \
+  --robot /private/input/robot --cache /private/cache/EXACT_KEY \
+  --output /private/reference-visualization
+```
 
-The first retained SOMA-uniform BVH at dataset revision
-`2f59b2077b9da34dd4e43618e705c7cb962c9a66` has source SHA-256
-`a81ff5609be1bd6f1733059740a4116f7c630326331141335f42b1e1544e93b2`.
-Its literal frame time is `0.008333`, preserved without relabeling it 30 Hz.
-No licensed BVH bytes or actor-specific source paths are committed here.
+This second video is kinematic reference playback, not physics. Its joint count
+comes from the selected embodiment. The physics baseline and reference playback
+are separate artifacts with explicit labels.
 
-| Check | Observed result |
+## Observed result on the approved body
+
+| Check | Result |
 | --- | --- |
-| Explicit eight-frame preliminary check | 8/8 feasible; 1.805 mm maximum position error; 0.004094 rad maximum orientation error; 0.343 s CPU |
-| Complete original clip | **Rejected**; all 599 frames retained; 423 feasible, 176 rejected; 86.45 s CPU |
-| Complete-clip maximum position residual | Left wrist 9.419 mm; right wrist 23.863 mm; left ankle 2.603 mm; right ankle 1.126 mm |
-| Complete-clip maximum orientation residual | 0.007526 rad |
-| Complete-clip training output | No `motion.npz`; no training admission |
+| Owner FK versus exported model, all 59 links at nonzero pose | Position error ≤3.33e-16 m; rotation matrix error ≤9.99e-16 |
+| Two-second CPU physics, 400 steps | Finite throughout; zero MuJoCo warnings; contacts exercised |
+| Constant-position PD standing | **Failed**: root height 0.688→0.289 m; robot falls forward |
+| Peak contact penetration in that baseline | 28.2 mm |
+| Complete source retarget | 599/599 frames retained; 88.76 s CPU |
+| Original 2 mm optimizer goal | Not satisfied for the whole clip |
+| Predeclared nominal reference contract | Accepted all 599 frames |
+| Maximum landmark / orientation error | 23.863 mm / 0.007526 rad |
+| Maximum vertical correction / joint speed | 21.983 mm / 4.7612 rad/s |
+| Minimum reference collision-geometry height | 2 mm |
+| Original / reference sample rate | 120.004800192 / 30.001200048 Hz |
 
-The short preliminary result did not establish whole-clip success. The full run did
-not cut failed frames or loosen tolerances. These figures establish geometric
-retarget behavior and retained rejection evidence, not a trained or qualified robot.
+The retarget cache key is
+`7f2d793d4a9e66eb5171498c2c7d8698d14c686e88cdb87fe065ef46132d5233`;
+manifest SHA-256 is
+`04f2c340dc1402bb41b09c3904588988c7f77facc54e5754eb95498b6483a624`.
+Private inputs, receipts and videos are retained under
+`data/bones_seed/nominal-approved-ca3fb7/`. Catalog training admission remains
+separate from local reference acceptance.
 
-## Recovery artifacts
+The complete cache was published privately through Catalog to R2, linked to the
+mirrored BONES-SEED source entry, then all four members were downloaded and verified
+against the manifest above. Its pack is `xmimic.retarget.` followed by the cache key.
+It remains marked `training_admitted=false`; storage and source lineage do not grant
+learning access or establish balance. No Hugging Face download was repeated.
 
-Managed single-GPU training checkpoints include complete carry and randomized
-constants. Intermediate checkpoints use the managed runtime's persistent checkpoint
-mechanism. Final output additionally contains `recovery/index.json` and bounded
-parts of the opaque native state archive, alongside the inference policy.
+The earlier 39-coordinate SO101-head body is superseded. Its old nominal exporter
+used intrinsic `xyz` instead of URDF's extrinsic `XYZ`; its floor/collision/render
+conclusions are invalid. Old caches remain diagnostic history and cannot be reused
+under this new body identity. No GPU training used those artifacts.
 
-`xmimic.managed_worker.restore_recovery_archive(directory, destination)` verifies
-chunk membership, order, sizes, per-chunk SHA-256 and complete-archive SHA-256.
-Reconstructing this archive is distinct from automatic runtime reattachment and
-still requires native configuration/body/source binding and pytree-template checks
-before training can continue. Policy NPZ files alone are not resumable training state.
-
-### Explicit nominal reference contract
-
-The original 599-frame solve remains rejected by its 2 mm optimization goal. A separately versioned nominal simulation contract now accepts at most 30 mm positional approximation and 0.01 rad orientation error while leaving that optimizer goal unchanged. This bound is an experimental motion-tracking choice, not a measured robot capability.
-
-`NominalQuality` retains every native joint sample and original source timebase in `candidate.npz`. It translates each whole pose vertically until the lowest designated foot collision geometry is 2 mm above the floor; a correction above 50 mm refuses. All robot collision geometry must remain above -1 mm. The reference clock is explicitly dilated by four, and the resulting discrete joint velocity must stay below 6 rad/s. Native coordinate bounds remain mandatory. The original optimizer result, original candidate, per-frame vertical corrections, new owner scene/profile hashes, and new reference timebase remain in the derived cache. No foot-contact labels, no-slip condition, balance result, or physical qualification are inferred.
-
-The owner exporter now records `CollisionMode.GROUND_ONLY` in this example's nominal profile: robot collision geometry has `contype=2, conaffinity=1`; the floor has `contype=1, conaffinity=2`. This avoids treating overlapping convex mesh approximations of fixed camera/shoulder structure as a qualified self-collision model. Source meshes, body identity, inertials, native limits, and hardware facts are unchanged. Legacy profiles without this field retain full collision behavior.
-
-The retained real SOMA candidate passed this nominal contract with 599/599 frames, maximum root correction 21.987 mm, minimum collision-geometry floor height 2 mm, maximum joint speed 4.7612 rad/s, maximum positional residual 23.863 mm, and maximum orientation residual 0.007526 rad. Its source rate remains 120.004800192 Hz; the reference is 30.001200048 Hz. This is reference preparation, not a trained-policy or physical-robot result.
-
-To reuse retained solver work without repeating IK:
-
-```bash
-python -m tools.qualify_retarget --source-cache /private/original-cache/key \
-  --recipe /private/nominal/recipe.json --robot /private/nominal/robot \
-  --cache /private/derived-cache --execution-ref retained-nominal-projection
-```
-
-The command refuses changes to source mapping or optimizer settings, verifies the original completed cache, and writes a distinct derived cache. The old rejection is immutable. `tools/render_retarget.py` renders source and reference with actual MuJoCo robot meshes, residuals and native joint-limit indicators; the video displays both source time and reference time. It is a kinematic replay, not a physics rollout.
-
-**Engineering hold (2026-11-08):** the user rejected the SO-101-headed development body for further learning promotion and requested restoration of the earlier humanoid head with human engineering review. The measurements above are preserved diagnostics of that superseded candidate, not authorization to train it or a qualification of its construction. No GPU training was performed for that candidate. The generic parser, projection, recovery and visualization mechanisms remain reusable after a reviewed body is selected.
-
-The original nominal exporter used the wrong Euler convention for URDF RPY.
-Its old floor/collision/rendering conclusions are invalid. Corrected owner receipts
-use `sx-embodiments.nominal-mujoco/v2` and explicit extrinsic `XYZ` rotations;
-XMimic refuses old bundles for learning. Regenerate from the pinned body and profile.
-The original-head assembly is a separate engineering-review draft. Training remains
-held; restoring its head does not qualify the full model.
+The generic platform PR remains unpublished: required protocol-tool downloads
+return HTTP 504 before CI checks run. No Modal CPU/H100 job, trained policy,
+hosted recovery result or physical operation is claimed by these local diagnostics.

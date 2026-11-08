@@ -29,7 +29,7 @@ from xmimic.retarget_target import IKConfig, Landmark, TargetKind, TargetProfile
 from xmimic.retarget_workflow import RetargetRecipe, SegmentTarget
 from xmimic.retarget_quality import NominalQuality
 
-EXPECTED_BODY = 'a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3'
+EXPECTED_BODY = 'ca3fb7c3b69a4df643d21904d64b57c7d954c536dbb70660143d75133e53f317'
 # Nominal anatomical correspondence: source +Z forward, +X left, +Y up.
 WORLD_FROM_SOURCE = ((0.,0.,1.,0.),(1.,0.,0.,0.),(0.,1.,0.,0.),(0.,0.,0.,1.))
 TARGETS = (('LeftHand','left_wrist_roll_link'),('RightHand','right_wrist_roll_link'),
@@ -97,13 +97,13 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
         'Development nominal simulation only; no hardware drive, physical qualification or standing claim.',
         'All joint PD gains, effort limits, armatures and action scales are experimental component-class choices.',
         'Initial simulation pose is nearest bounded zero; IK seed bends knees +0.15 and hip pitch -0.075 rad, not calibrated Ready postures.',
-        'waist_rod_joint is fixed at zero as an explicit nominal mechanism projection.',
+        'waist_rod_joint, neck_yaw_joint and head_joint are fixed at zero as explicit nominal mechanism/head projections; no neck actuator facts are invented.',
         'foot2 links are designated support links; sole offsets use their lowest source collision vertex at nominal pose.',
         'Source-derived URDF inertials are preserved, including their existing estimates; they are not measured dynamics.',
         'Self collisions are disabled explicitly in this nominal ground-only simulation; no self-collision qualification.',
         'Ground is a rigid plane with nominal friction (1,0.005,0.0001); no contact calibration is claimed.',
     )
-    preliminary = NominalProfile(str(body.id),joints,(('waist_rod_joint',0.),),tracked,
+    preliminary = NominalProfile(str(body.id),joints,(('waist_rod_joint',0.),('neck_yaw_joint',0.),('head_joint',0.)),tracked,
                   tuple(SupportContact(link,0.) for link in SUPPORTS),(0.,0.,0.),(1.,0.,0.,0.),
                   .005,(0.,0.,-9.81),(1.,.005,.0001),assumptions, CollisionMode.GROUND_ONLY)
     with tempfile.TemporaryDirectory(prefix='geometry-',dir=output) as scratch:
@@ -156,9 +156,9 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
     root_offset_world = np.array([0.,0.,root_height-clip.world_positions[0,source_root,2]*root_scale])
     root_offset = human_R.T @ root_offset_world
     held = tuple((j.name,j.default_position) for j in joints
-                 if 'finger_joint' in j.name or j.name.startswith('so101_') or j.name in ('torso_joint','waist_roll_joint','waist_pitch_joint'))
+                 if 'finger_joint' in j.name or j.name in ('torso_joint','waist_roll_joint','waist_pitch_joint'))
     target = TargetProfile(tuple(Landmark(name,link,TargetKind.LINK,orientation=name.endswith('Foot')) for name,link in TARGETS),
-                           held,(('waist_rod_joint',0.),))
+                           held,(('waist_rod_joint',0.),('neck_yaw_joint',0.),('head_joint',0.)))
     recipe = RetargetRecipe(target,WORLD_FROM_SOURCE,'Hips',
                            tuple(tuple(row) for row in human_R.T),
                            tuple(float(v) for v in root_offset),root_scale,(),orientation_offsets,
