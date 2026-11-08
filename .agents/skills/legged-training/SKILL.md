@@ -711,3 +711,15 @@ GPU execution or training admission was produced from rejected calibration.
 | Small fitted foot-orientation error but wrong visible heading | Arbitrary first-pose offset redefined desired heading | Map observed source point-pair to physical canonical point-pair; independently audit raw directions |
 | New solve stopped after4iterations | Clipped unconstrained step was not a descent step despite nonzero projected gradient | Generic feasible gradient fallback; reachable independent regression |
 | Better toe direction with10–11degree leg errors | Two bounded local fits reach the same compromise with terminal ankle limits active | Preserve rejection and model-limit evidence; do not fabricate a training recipe, widen bounds or crop frames |
+
+
+The follow-up owner FK audit (`foot-frame-audit/leg-axis-audit.json`) found original
+and current leg axes and zero-pose FK identical. Knee/foot1 axes are perpendicular
+to physical foot-forward; foot2 is parallel, confirming terminal roll rather than
+a sideways knee. At the bounded optimum, native knees are−3.16/+3.97degrees while
+hip→knee→ankle point-pair bends are23.58/22.76degrees. Fixed link-origin offsets make
+those different quantities. Do not mistake physical pivot polylines for anatomical
+bone angles, infer a joint-axis repair from the residual, or claim global
+infeasibility. Correspondence semantics and geometric feasibility remain to resolve.
+The inspected source/calibration foot-detail visual and hash receipt are retained in
+`toe-comparison-v1/visualization-v2/`; all panels label both fitted poses REJECTED.

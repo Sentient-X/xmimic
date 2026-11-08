@@ -257,7 +257,10 @@ leg-direction errors9.56–11.30degrees. A separate bounded least-squares diagno
 from two starts also retained approximately10–11degree leg errors while both
 terminal ankle coordinates reached their25degree limits. These local fits do not
 prove global infeasibility or justify changing canonical limits. No new full-clip
-cache or training admission was produced.
+cache or training admission was produced. The owner FK audit found no sideways knee:
+original and current leg axes agree. Pivot-to-pivot limb angles include fixed
+link offsets and differ from native joint angles, so anatomical correspondence
+semantics remain part of the unresolved fit.
 
 A generic numerical correction prevents false convergence when clipping an
 unconstrained least-squares step at a joint limit destroys descent. A projected
