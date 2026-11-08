@@ -393,6 +393,33 @@ mass from a single source hull estimate. Re-render the resulting candidate, comp
 its source transforms and mass accounting, and obtain the owner's review before
 admitting that body to GPU training.
 
+The repaired review candidate is body
+`ca3fb7c3b69a4df643d21904d64b57c7d954c536dbb70660143d75133e53f317`.
+From the owning embodiment checkout, reproduce the visual review with:
+
+```bash
+PYTHONPATH=. python tools/review_humanoid_connections.py \
+  --output /new/review-directory --previous-urdf /retained/previous/robot.urdf
+```
+
+The tool writes front/side/three-quarter, shoulder and ankle source comparisons
+and a portable body/asset package. The observed packet is
+`data/bones_seed/engineering-head-review/shoulder-restoration-v4`; its 59 links
+form one connected tree. The fixed mount-to-chest sampled distances are now
+0.0611/0.0242 mm without moving joints. Ankle rod and foot-seat geometry matches
+the original and appears attached in closeups; the approximately 17 mm distance
+between parallel linkage visual bodies was not an entirely open ankle.
+
+Thirty-six affected checks passed. Independent review reproduced all 13 original
+chest visuals exactly once, source transforms within 2e-8 and unchanged retained
+FK at five nonzero configurations. Splitting the old monolithic chest hull requires
+re-estimating the remaining chest and both mounts at the same 600 kg/m3 density:
+their combined nominal mass changes from 4.79762 to 5.84242 kg. The full humanoid
+adds 2.06566 kg of nominal mount estimates while retaining its original core
+inertials. This is explicit estimate provenance, not measured robot mass. The owner
+has been shown the revised packet; review and training approval remain separate
+from these source-preservation checks.
+
 ### Resume publication after an external CI failure
 
 Platform PR3562 retained exact head `f7ac42707a38b9508da38266e71c47702badcb6c`.
