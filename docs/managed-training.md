@@ -101,5 +101,9 @@ Local acceptance on 2026-11-08:178 CPU tests and44subtests passed. Independent r
 found and corrected output-directory and interrupted-materialization bugs; its20-check
 correction pass retained no finding. A real rejected599-frame retarget cache was
 published privately to Catalog/R2, linked to its mirrored source, and downloaded with
-all member digests verified. It remains excluded from training. Two complete source
-clips have been tested; neither passed the current Sentient geometric profile.
+all member digests verified. It remains excluded from training. The subsequently
+approved 33-coordinate body retained all 599 frames of the first clip and passed
+its explicit nominal reference contract; its new cache also has complete R2
+readback. The untrained constant-position physics baseline falls forward. See
+[current nominal results](sentient-nominal.md) for exact inputs and limits; neither
+cache custody nor reference acceptance establishes a trained or balanced policy.

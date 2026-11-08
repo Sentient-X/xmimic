@@ -436,3 +436,74 @@ run and resume only its merge step after the required verdict; do not buy anothe
 run to correct stale metadata. The temporary owner worktree was snapshotted and
 removed with `tools/safe_worktree_cleanup.py`; pushed source and persistent review
 artifacts remain available.
+
+### Approved body: actual nominal simulation and reference evidence
+
+On 2026-11-08 the owner answered **Proceed with nominal simulation testing** for
+body `ca3fb7c3b69a4df643d21904d64b57c7d954c536dbb70660143d75133e53f317`.
+That supersedes the visual-review hold for this exact body, not hardware qualification.
+`examples/sentient_nominal.py` now binds it and explicitly holds the original neck
+yaw, head pitch and waist rod at zero. The example's profile, recipe and training
+metadata reproduce the prepared input bytes exactly.
+
+Use the coherent owning snapshot `a5528ec576615cde3e0c6645b2a4fd548b72e942`, retained
+on `Sentient-X/embodiments:codex/approved-nominal-export`. It combines reviewed
+assembly a01160b with corrected exporter5780529. The older exporter's asset manifest
+does not know the restored shoulder hulls. Do not treat a Python module overlay as
+a published runtime or change the approved body to satisfy an old manifest.
+
+```bash
+# With the exact owner installed and SX_EMBODIMENTS_ASSETS naming the verified closure:
+python -m examples.sentient_nominal --embodiment-document BODY.json \
+  --source SOURCE.bvh --output NEW_PROFILE
+python -m tools.diagnose_nominal --robot PREPARED_INPUT/robot \
+  --output NEW_PD_DIAGNOSTIC --seconds 2
+python -m tools.render_retarget --source SOURCE.bvh \
+  --recipe PREPARED_INPUT/recipe.json --robot PREPARED_INPUT/robot \
+  --cache CACHE/EXACT_KEY --output NEW_REFERENCE_VIDEO
+JAX_PLATFORMS=cpu python -m pytest tests/test_render_retarget.py \
+  tests/test_retarget_quality.py tests/test_embodiment_bundle.py -q
+```
+
+Observed: 24 focused tests pass. All 59 exported body frames matched owner FK at
+nonzero native/floating-root pose (3.33e-16 m, 9.99e-16 rotation matrix error).
+The two-second CPU baseline retained all 401 states, controls, forces, contacts and
+warnings. It stayed finite with zero warnings but **fell forward**: root height
+0.688 to 0.289 m, peak penetration28.2 mm. A finite simulation is not standing success.
+The new tool renders the unchanged trajectory with an untrained-PD label; it refuses
+existing output directories and paths under raw. It does not tune gains or command
+hardware.
+
+The shared `retarget_clip` function processed the complete599-frame SOMA clip in
+88.76 seconds. The 2 mm optimizer goal still failed, while the predeclared30 mm,
+0.01 rad, four-times-slower nominal contract accepted every frame. Observed maxima:
+23.863 mm position residual,0.007526 rad orientation,21.983 mm root projection and
+4.7612 rad/s joint speed; minimum collision geometry height2 mm. Retained source
+timebase is120.004800192 Hz and nominal reference30.001200048 Hz. The source/reference
+video is kinematic playback, separate from the actual falling physics baseline.
+
+Cache key `7f2d793d4a9e66eb5171498c2c7d8698d14c686e88cdb87fe065ef46132d5233`, manifest
+`04f2c340dc1402bb41b09c3904588988c7f77facc54e5754eb95498b6483a624`.
+Reopening returned a verified cache hit in0.143 seconds without solving any frame.
+`CatalogPublisher.publish`, `CatalogClient.record_source_lineage` and
+`CatalogPublisher.restore` published the private cache, linked the mirrored source
+pack and read back all four members with hashes verified. The cache remains
+`training_admitted=false`; storage and nominal reference acceptance do not mint
+Catalog training membership. Persistent receipts and both videos are under
+`data/bones_seed/nominal-approved-ca3fb7/`.
+
+| Failure | Established cause | Action |
+| --- | --- | --- |
+| Older exporter cannot resolve the new shoulder hulls | Owning manifest predates the approved assembly | Use the coherent source/manifest snapshot above |
+| Stationary PD falls despite finite physics | Constant position targets provide no learned whole-body balance | Retain the fall and its trajectory; report no standing success |
+| Retained archive probe contains G1 CSVs | That probe came from an earlier, different archive | Reuse the exact hash-bound SOMA prepared source; never retarget through G1 |
+| Protocol generation remains unavailable | Exact protoc33.5 Linux asset still returns HTTP504 | Do not dispatch identical CI retries; no runtime image or hosted job is claimed |
+
+Stop before hosted learning without published compatible images and Catalog training
+admission. The finite physics result does not qualify balance, self collision, ground
+contact parameters or hardware operation. Do not widen thresholds or crop failed
+frames to turn a rejected reference into an accepted one.
+
+The bounded independent review reproduced all 400 physics steps exactly and injected
+a renderer failure: all 401 saved states and the diagnostic report survived. It found
+no remaining issue in this change's input binding, passive holds or evidence claims.

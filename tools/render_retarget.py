@@ -253,7 +253,7 @@ def render(source_path, recipe_path, robot_path, cache_path, output, *, video_fp
             )
             draw.text(
                 (660, 12),
-                "Canonical Sentient · 39 joints",
+                f"Canonical target · {len(names)} joints",
                 font=_font(24),
                 fill=(230, 240, 255),
             )
