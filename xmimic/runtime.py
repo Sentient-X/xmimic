@@ -81,8 +81,9 @@ class RunLog:
     COLS = ["iteration", "wall_min", "sim_steps", "wm", "wm8", "pi", "v", "ir", "gn", "surv", "sim_r", "ep_len", "ep_ret", "term_frac",
             "it_per_s", "lr", "pi_lr", "nonfinite"]  # fmt: skip
 
-    def __init__(self, xm, cfg, t0, avg_template, args_meta, extra_cols=()):
+    def __init__(self, xm, cfg, t0, avg_template, args_meta, extra_cols=(), on_metrics=None):
         self.cfg, self.t0 = cfg, t0
+        self.on_metrics = on_metrics
         self.args_meta = {**args_meta, "embodiment_id": xm.meta.get("embodiment_id")}
         self.cols = self.COLS + list(extra_cols)
         self.f = open(os.path.join(cfg.log_dir, "train_log.csv"), "a")
@@ -141,6 +142,8 @@ class RunLog:
                    "pi_lr": float(s["pi_lr"][-1]), "nonfinite": int(s["nonfinite"][-1]), **(extra or {})}  # fmt: skip
             self.f.write(",".join(f"{row[k]:.6g}" if isinstance(row[k], float) else str(row[k]) for k in self.cols) + "\n")
             self.f.flush()
+            if self.on_metrics is not None:
+                self.on_metrics({k: v for k, v in row.items() if np.isfinite(v)}, it)
             probe = (f" | probe fails {int(s['ep_n_fail'][-1])}" if "ep_n_fail" in s else "") + "".join(
                 f" | {k} {v}" for k, v in (extra or {}).items())
             print(f"it {it} | {row['wall_min']:.2f} min | wm {row['wm']:.4f} e8 {row['wm8']:.4f} | pi {row['pi']:.3f} v {row['v']:.4f} "

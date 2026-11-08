@@ -64,7 +64,8 @@ def run(cfg: Config, *, recovery: RecoveryOptions | None = None):
         print(f"warm-up: {cfg.warmup_steps} collection steps {time.time() - t0:.1f} s", flush=True)
     else:
         print(f"restored complete training state at iteration {start_it}", flush=True)
-    log = RunLog(xm, cfg, t0, carry["avg"], meta)
+    log = RunLog(xm, cfg, t0, carry["avg"], meta,
+                 on_metrics=recovery.on_metrics if recovery is not None else None)
     log.it_log = start_it
     state = {"carry": carry, "it": start_it}
     del carry

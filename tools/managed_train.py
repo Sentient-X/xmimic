@@ -75,6 +75,7 @@ def arguments():
 
 def prepare_inputs(args):
     """Resolve a selected body once and retain its exact portable input closure."""
+    from sx_contracts.identity import file_digest
     from sx_embodiments import Embodiment, embodiments
     from tools.prepare_embodiment_job import prepare
     from xmimic.retarget_source import ParseLimits, parse_soma_bvh
@@ -104,13 +105,49 @@ def prepare_inputs(args):
         directory = args.run_dir / "inputs" / key
         args.run_dir.mkdir(parents=True, exist_ok=True)
         request = args.run_dir / "preparation-request.json"
-        if request.exists() and json.loads(request.read_bytes()) != identity:
+        state = (
+            json.loads(request.read_bytes())
+            if request.exists()
+            else {"selection": identity}
+        )
+        if state.get("selection") != identity:
             raise ValueError(
                 "Run directory already binds another body or source; choose another run directory"
             )
-        _atomic(request, _json(identity))
+        _atomic(request, _json(state))
         if not directory.exists():
+            if "closure" in state:
+                raise ValueError(
+                    "Retained preparation is missing; reconcile the existing run"
+                )
             prepare(body, *payloads, source_entry=args.source_entry, output=directory)
+            state["closure"] = {
+                path.relative_to(directory).as_posix(): str(file_digest(path))
+                for path in sorted(directory.rglob("*"))
+                if path.is_file()
+            }
+            _atomic(request, _json(state))
+        if "closure" not in state:
+            raise ValueError(
+                "Preparation has no acknowledged content closure; reconcile before submission"
+            )
+        members = sorted(directory.rglob("*"))
+        if directory.is_symlink() or any(path.is_symlink() for path in members):
+            raise ValueError("Retained preparation contains a linked member")
+        actual = {
+            path.relative_to(directory).as_posix(): str(file_digest(path))
+            for path in members
+            if path.is_file()
+        }
+        if actual != state["closure"]:
+            raise ValueError(
+                "Retained preparation bytes differ from the selected input closure"
+            )
+        if (
+            Embodiment.from_json((directory / "embodiment.json").read_text()).id
+            != body.id
+        ):
+            raise ValueError("Retained preparation body differs from selection")
         args.inputs = directory
     elif any(
         path is not None
@@ -139,8 +176,8 @@ def prepare_inputs(args):
 
 async def run(args):
     from sx.client import Sx
-    from sx.credentials import api_key_for
-    from sx._transport import ConnectionProfile, Endpoints
+    from sx.credentials import api_key_for, environment_endpoints
+    from sx._transport import ConnectionProfile
     from sx_auth.principal import ProjectId
     from sx_catalog_client import CatalogClient
     from sx_service.registry import CATALOG
@@ -198,9 +235,12 @@ async def run(args):
         cfg.iterations,
         {},
     )
-    url = Endpoints.resolve(connection).for_door(CATALOG.name)
+    endpoints = environment_endpoints(connection)
+    url = endpoints.for_door(CATALOG.name)
     with CatalogClient(url, api_key=key, project_id=ProjectId(args.project)) as catalog:
-        client = Sx(project=args.project, api_key=key, profile=connection)
+        client = Sx(
+            project=args.project, api_key=key, profile=connection, endpoints=endpoints
+        )
         try:
             inputs = publish_inputs(
                 catalog,

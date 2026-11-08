@@ -32,6 +32,7 @@ class RecoveryOptions:
     source_binding: str = ''
     on_checkpoint: Callable[[Path, int], None] | None = None
     on_restored: Callable[[], None] | None = None
+    on_metrics: Callable[[dict[str, float | int], int], None] | None = None
     stop_requested: Callable[[], bool] | None = None
     handle_signals: bool = True
 

@@ -198,6 +198,7 @@ def retarget(context) -> Path:
             path = work / 'progress-receipts' / f'frame-{completed:09d}.json'
             _write(path, receipt, staging=staging)
             context.checkpoint(path, step=completed)
+            context.log({"retarget/frames": completed, "retarget/total_frames": receipt["total_frames"]}, step=completed)
     _copy_prefix(artifacts, 'robot', robot, staging=staging)
     with _body(artifacts, work / 'owner-assets', staging=staging) as body:
         if str(body.id) != context.config['embodiment_id']:
@@ -220,7 +221,8 @@ def retarget(context) -> Path:
                                    expected_embodiment_id=str(body.id), cache=cache,
                                    clip_id=context.config['clip_id'], source_group=context.config['source_group'],
                                    execution_ref=context.job_id, shape_sha256=context.config['shape_sha256'],
-                                   stop_requested=lambda: context.stopping, on_checkpoint=save_progress)
+                                   stop_requested=lambda: context.stopping, on_checkpoint=save_progress,
+                                   robot_dir=robot)
         except RetargetInterrupted:
             if latest_progress:
                 save_progress(latest_progress[-1], force=True)
@@ -383,7 +385,8 @@ def train(context) -> Path:
     run(cfg, recovery=RecoveryOptions(str(states), str(resume_from) if resume_from else None,
                                       source_binding=context.config['source_binding'], on_checkpoint=checkpoint,
                                       on_restored=restored, stop_requested=lambda: context.stopping,
-                                      handle_signals=False))
+                                      handle_signals=False,
+                                      on_metrics=lambda metrics, step: context.log(metrics, step=step)))
     if context.stopping:
         context.interrupted()
     output = context.run_dir / 'artifact'
@@ -392,6 +395,8 @@ def train(context) -> Path:
     if not policies:
         raise ValueError('Training did not produce a deployable policy artifact')
     _copy(policies[-1], output / 'policy.npz', staging=staging)
+    for name in ('train_log.csv', 'compile.json', 'args.json'):
+        _copy(work / 'logs' / name, output / 'metrics' / name, staging=staging)
     final = last[-1] if last else resume_from
     if final is None:
         raise ValueError('Training completed without recoverable state')

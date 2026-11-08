@@ -121,3 +121,46 @@ def test_workflow_resolves_selected_body_and_reuses_bound_preparation(
     args.source_entry = "different-parent"
     with pytest.raises(ValueError, match="another body or source"):
         prepare_inputs(args)
+
+
+def test_workflow_refuses_changed_retained_preparation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tools.managed_train import prepare_inputs
+
+    context = context_fixture(tmp_path, monkeypatch)
+    body, source, nominal, recipe, training = inputs(context)
+    paths = []
+    for name, payload in [
+        ("body.json", body.to_json().encode()),
+        ("source.bvh", source),
+        ("nominal.json", nominal),
+        ("recipe.json", recipe),
+        ("training.json", training),
+    ]:
+        path = tmp_path / name
+        path.write_bytes(payload)
+        paths.append(path)
+    args = SimpleNamespace(
+        inputs=None,
+        embodiment=None,
+        embodiment_document=paths[0],
+        source=paths[1],
+        nominal_profile=paths[2],
+        recipe=paths[3],
+        training_profile=paths[4],
+        source_entry="private-source-parent",
+        run_dir=tmp_path / "run",
+        embodiment_id=None,
+    )
+    prepare_inputs(args)
+    prepared = args.inputs
+    for relative in ("source.bvh", "recipe.json", "robot/scene.xml"):
+        member = prepared / relative
+        original = member.read_bytes()
+        member.write_bytes(original + b"\n")
+        args.inputs = None
+        with pytest.raises(ValueError, match="bytes differ"):
+            prepare_inputs(args)
+        member.write_bytes(original)
+    args.inputs = None
+    assert prepare_inputs(args) == 8
