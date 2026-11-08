@@ -1,9 +1,12 @@
 import json
+import os
 from pathlib import Path
+import tarfile
 
 import pytest
 
-from tools.publish_urr_benchmark import archive_files, checkpoint_files, digest, verify_archive
+from tools.publish_urr_benchmark import archive_files, checkpoint_files, digest, prepare, verify_archive
+from xmimic.artifact_cache import content_hash
 
 
 def test_archive_preserves_empty_members_and_refuses_mutated_inventory(tmp_path):
@@ -52,3 +55,111 @@ def test_only_final_complete_checkpoint_is_selected_without_touching_older(tmp_p
 def test_checkpoint_receipt_cannot_escape_cell(tmp_path):
     with pytest.raises(ValueError,match='final full checkpoint'):
         checkpoint_files(tmp_path,{'completed':True,'iterations':2,'checkpoint':str(Path('/outside'))})
+
+
+def test_archive_seal_preserves_competing_bytes_and_recovers_verified_staging(tmp_path, monkeypatch):
+    source = tmp_path/'source'
+    source.write_bytes(b'paid evidence')
+    archive = tmp_path/'evidence.tar.gz'
+    link = os.link
+    def competing_writer(staging, destination):
+        destination.write_bytes(b'other retained evidence')
+        return link(staging, destination)
+    monkeypatch.setattr(os, 'link', competing_writer)
+    with pytest.raises((ValueError, tarfile.ReadError)):
+        archive_files({'source':source}, archive)
+    assert archive.read_bytes() == b'other retained evidence'
+    assert archive.with_suffix('.partial').is_file()
+
+    recovered = tmp_path/'recovered.tar.gz'
+    def interrupted_seal(*args):
+        raise OSError('injected interruption before seal')
+    monkeypatch.setattr(os, 'link', interrupted_seal)
+    with pytest.raises(OSError, match='injected'):
+        archive_files({'source':source}, recovered)
+    monkeypatch.setattr(os, 'link', link)
+    inventory = archive_files({'source':source}, recovered)
+    verify_archive(recovered, inventory)
+    assert not recovered.with_suffix('.partial').exists()
+
+
+def screening_fixture(root):
+    screen, prepared, owner, output = (root/name for name in ('screen','prepared','owner','output'))
+    for path in (screen/'checkout', screen/'source', screen/'visual-review-task-0-v3', prepared/'robot', owner/'sx_embodiments'):
+        path.mkdir(parents=True)
+    def write(path, value):
+        path.write_text(json.dumps(value))
+    for name in ('embodiment.json','robot/embodiment.json'):
+        write(prepared/name, {})
+    (prepared/'robot/scene.xml').write_text('<mujoco/>')
+    (prepared/'robot/canonical.urdf').write_text('<robot/>')
+    (prepared/'mesh.stl').write_bytes(b'mesh')
+    write(prepared/'robot/receipt.json', {'files':[]})
+    write(prepared/'benchmark.json', dict(embodiment_id='synthetic_fixture',
+        scene_sha256=digest(prepared/'robot/scene.xml'), urdf_sha256=digest(prepared/'robot/canonical.urdf'),
+        owner_receipt_sha256=digest(prepared/'robot/receipt.json'),
+        assets=[dict(path='mesh.stl',sha256=digest(prepared/'mesh.stl'),size_bytes=4)]))
+    request = dict(methods=['dls'],seeds=[0],evaluation_seeds=[7], task=dict(episode_steps=1),
+        body_sha256=digest(prepared/'embodiment.json'),preparation_sha256=digest(prepared/'benchmark.json'))
+    source_files = {}
+    for field, name in (('runner_sha256','tools/benchmark_urr.py'),
+                        ('environment_sha256','xmimic/urr_benchmark.py'),
+                        ('learner_sha256','xmimic/urr_learning.py')):
+        source = screen/'checkout'/name
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(name)
+        source_files[name] = request[field] = digest(source)
+    write(screen/'request.json', request)
+    evaluation = screen/'dls/seed-0/evaluation'
+    evaluation.mkdir(parents=True)
+    evaluation_request = dict(seeds=[7],environment=dict(body_document_sha256=request['body_sha256'],
+        preparation_sha256=request['preparation_sha256'],scene_sha256=digest(prepared/'robot/scene.xml'),
+        environment_code_sha256=request['environment_sha256']))
+    summary = dict(request_sha256=content_hash(evaluation_request))
+    write(evaluation/'request.json', evaluation_request)
+    write(evaluation/'summary.json', summary)
+    write(evaluation/'task-7.json', dict(seed=7, request_sha256=content_hash(evaluation_request),measurements=[{}]))
+    write(screen/'result.json',dict(complete=True,request_sha256=content_hash(request),
+        records=[dict(method='dls',training_seed=0,evaluation=summary)]))
+    write(screen/'screening-report.json', dict(run_result_sha256=digest(screen/'result.json')))
+    write(screen/'checkout-receipt.json',dict(files=source_files,revision='a'*40))
+    for name in ('README.md','LICENSE','THIRD_PARTY_NOTICES.md','pyproject.toml'):
+        (owner/name).write_text(name)
+    (root/'commit.txt').write_text('b'*40)
+    return screen, prepared, owner, output
+
+
+@pytest.mark.parametrize('mutation', ['request_link','report_link','missing_cell','duplicate_cell','scene','asset','task_request','task_samples'])
+def test_preparation_refuses_broken_run_closure_before_archiving(tmp_path, mutation):
+    screen, prepared, owner, output = screening_fixture(tmp_path)
+    result = json.loads((screen/'result.json').read_bytes())
+    if mutation == 'request_link':
+        result['request_sha256'] = '0'*64
+    elif mutation == 'missing_cell':
+        result['records'] = []
+    elif mutation == 'duplicate_cell':
+        result['records'] *= 2
+    if mutation in ('request_link','missing_cell','duplicate_cell'):
+        (screen/'result.json').write_text(json.dumps(result))
+        (screen/'screening-report.json').write_text(json.dumps(dict(run_result_sha256=digest(screen/'result.json'))))
+    elif mutation == 'report_link':
+        (screen/'screening-report.json').write_text(json.dumps(dict(run_result_sha256='0'*64)))
+    elif mutation in ('scene','asset'):
+        (prepared/('robot/scene.xml' if mutation == 'scene' else 'mesh.stl')).write_bytes(b'changed')
+    else:
+        path = screen/'dls/seed-0/evaluation/task-7.json'
+        task = json.loads(path.read_bytes())
+        task['request_sha256' if mutation == 'task_request' else 'measurements'] = '0'*64 if mutation == 'task_request' else []
+        path.write_text(json.dumps(task))
+    with pytest.raises(ValueError):
+        prepare(screen,prepared,owner,output)
+    assert not list(output.glob('*.tar.gz'))
+
+
+def test_complete_preparation_reopens_without_changing_evidence(tmp_path):
+    args = screening_fixture(tmp_path)
+    named, inventory = prepare(*args)
+    before = {name:digest(path) for name,path in named.items()}
+    reopened, repeated = prepare(*args)
+    assert inventory == repeated
+    assert before == {name:digest(path) for name,path in reopened.items()}

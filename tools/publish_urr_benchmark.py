@@ -16,7 +16,7 @@ import tarfile
 from sx_contracts import Sha256Digest
 from sx_contracts.identity import canonical_json
 from sx_training.artifacts import ArtifactFile, ArtifactManifest, ArtifactPurpose
-from xmimic.artifact_cache import CatalogPublisher, Provenance
+from xmimic.artifact_cache import CatalogPublisher, Provenance, content_hash
 from xmimic.managed_pipeline import restore_pack
 
 
@@ -57,20 +57,30 @@ def archive_files(files, destination):
         inventory[name] = {'sha256':digest(path), 'size_bytes':path.stat().st_size}
     if not destination.exists():
         partial = destination.with_suffix('.partial')
-        with partial.open('xb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0) as zipped:
-            with tarfile.open(fileobj=zipped, mode='w') as archive:
-                for name, path in sorted(files.items()):
-                    member = tarfile.TarInfo(name)
-                    member.size = inventory[name]['size_bytes']
-                    member.mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
-                    with path.open('rb') as source:
-                        archive.addfile(member, source)
-        partial.rename(destination)
+        if not partial.exists():
+            with partial.open('xb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0) as zipped:
+                with tarfile.open(fileobj=zipped, mode='w') as archive:
+                    for name, path in sorted(files.items()):
+                        member = tarfile.TarInfo(name)
+                        member.size = inventory[name]['size_bytes']
+                        member.mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
+                        with path.open('rb') as source:
+                            archive.addfile(member, source)
+        # Recover a completed prior staging file only after verifying all bytes.
+        # link is an atomic no-clobber seal even if another writer wins the race.
+        verify_archive(partial, inventory)
+        try:
+            os.link(partial, destination)
+        except FileExistsError:
+            verify_archive(destination, inventory)
+        partial.unlink()
     verify_archive(destination, inventory)
     return inventory
 
 
 def verify_archive(path, inventory):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('Archive must be a regular file')
     observed = {}
     with tarfile.open(path, 'r:gz') as archive:
         for member in archive:
@@ -106,15 +116,34 @@ def checkpoint_files(cell, training):
 
 def prepare(screening, prepared, owner, output):
     screening, prepared, owner, output = map(Path, (screening, prepared, owner, output))
-    if 'raw' in output.resolve().parts or output.is_symlink():
+    if 'raw' in output.resolve().parts or any(p.is_symlink() for p in (output, *output.parents)):
         raise ValueError('Publication requires a derived regular directory')
     output.mkdir(parents=True, exist_ok=True)
     request = json.loads((screening/'request.json').read_bytes())
     result = json.loads((screening/'result.json').read_bytes())
     if result['complete'] is not True:
         raise ValueError('Only completed screening evidence can be published')
+    report = json.loads((screening/'screening-report.json').read_bytes())
+    if result['request_sha256'] != content_hash(request) or report['run_result_sha256'] != digest(screening/'result.json'):
+        raise ValueError('Screening request/result/report linkage differs')
+    expected_cells = {(method, seed) for method in request['methods']
+                      for seed in (request['seeds'][:1] if method == 'dls' else request['seeds'])}
+    actual_cells = [(record['method'], record['training_seed']) for record in result['records']]
+    if not expected_cells or len(actual_cells) != len(expected_cells) or set(actual_cells) != expected_cells:
+        raise ValueError('Screening does not contain exactly the requested method/seed cells')
     if digest(prepared/'embodiment.json') != request['body_sha256'] or digest(prepared/'benchmark.json') != request['preparation_sha256']:
         raise ValueError('Prepared body differs from completed screening')
+    prepared_files = files_under(prepared)
+    spec = json.loads((prepared/'benchmark.json').read_bytes())
+    required = {'robot/scene.xml': spec['scene_sha256'], 'robot/canonical.urdf': spec['urdf_sha256'],
+                'robot/receipt.json': spec['owner_receipt_sha256'], 'robot/embodiment.json': request['body_sha256']}
+    owner_receipt = json.loads((prepared/'robot/receipt.json').read_bytes())
+    required.update({f'robot/{name}': sha for name, sha in owner_receipt['files']})
+    required.update({member['path']: member['sha256'] for member in spec['assets']})
+    if any(name not in prepared_files or digest(prepared_files[name]) != sha for name, sha in required.items()):
+        raise ValueError('Prepared scene/asset closure differs')
+    if any(prepared_files[member['path']].stat().st_size != member['size_bytes'] for member in spec['assets']):
+        raise ValueError('Prepared asset size differs')
     checkout = files_under(screening/'checkout')
     receipt = json.loads((screening/'checkout-receipt.json').read_bytes())
     checkout_hashes = {name:digest(path) for name,path in checkout.items()}
@@ -122,6 +151,11 @@ def prepare(screening, prepared, owner, output):
     if (any(checkout_hashes.get(name) != sha for name,sha in receipt['files'].items())
             or any('__pycache__' not in Path(name).parts or not name.endswith('.pyc') for name in checkout_extras)):
         raise ValueError('Historical checkout differs from retained source receipt')
+    for field, name in (('runner_sha256','tools/benchmark_urr.py'),
+                        ('environment_sha256','xmimic/urr_benchmark.py'),
+                        ('learner_sha256','xmimic/urr_learning.py')):
+        if checkout_hashes.get(name) != request[field]:
+            raise ValueError('Historical source differs from executed benchmark code')
     evidence = {name:screening/name for name in ('request.json','result.json','screening-report.json','checkout-receipt.json')}
     evidence.update({f'source/{name}':path for name,path in files_under(screening/'source').items()})
     checkpoints = {}
@@ -135,6 +169,22 @@ def prepare(screening, prepared, owner, output):
             raise ValueError('Evaluation task closure is incomplete or contains unrecorded files')
         if json.loads(evaluation['summary.json'].read_bytes()) != record['evaluation']:
             raise ValueError('Screening and evaluation receipts disagree')
+        evaluation_request = json.loads(evaluation['request.json'].read_bytes())
+        evaluation_hash = content_hash(evaluation_request)
+        if evaluation_request['seeds'] != request['evaluation_seeds'] or record['evaluation']['request_sha256'] != evaluation_hash:
+            raise ValueError('Evaluation belongs to another request')
+        environment = evaluation_request['environment']
+        if any(environment[field] != expected for field, expected in (
+                ('body_document_sha256',request['body_sha256']),
+                ('preparation_sha256',request['preparation_sha256']),
+                ('scene_sha256',spec['scene_sha256']),
+                ('environment_code_sha256',request['environment_sha256']))):
+            raise ValueError('Evaluation belongs to another body, scene or code')
+        for seed in request['evaluation_seeds']:
+            task = json.loads(evaluation[f'task-{seed}.json'].read_bytes())
+            if (task['request_sha256'] != evaluation_hash or task['seed'] != seed
+                    or len(task['measurements']) != request['task']['episode_steps']):
+                raise ValueError('Evaluation task identity or sample count differs')
         evidence.update({f'{cell_name}/evaluation/{name}':path for name,path in evaluation.items()})
         training_path = cell/'training.json'
         if record['method'] != 'dls':
