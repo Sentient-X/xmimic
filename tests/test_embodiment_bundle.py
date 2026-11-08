@@ -98,5 +98,25 @@ def test_legacy_or_wrong_rotation_export_cannot_enter_training(tmp_path):
     receipt['scene_sha256'] = digest
     receipt['files'] = [['scene.xml', digest]]
     path.write_text(json.dumps(receipt))
-    with pytest.raises(ValueError, match='extrinsic RPY'):
+    with pytest.raises(ValueError, match='extrinsic RPY|self-contained'):
+        verify_nominal_receipt(tmp_path)
+
+
+@pytest.mark.parametrize("override", [
+    '<compiler angle="radian" eulerseq="xyz"/>',
+    '<include file="another-compiler.xml"/>',
+])
+def test_later_compiler_cannot_override_verified_rotation_convention(tmp_path, override):
+    from xmimic.embodiment_bundle import verify_nominal_receipt
+    fixture(tmp_path)
+    scene_path = tmp_path/'scene.xml'
+    scene = scene_path.read_text().replace('<option', override+'<option', 1)
+    scene_path.write_text(scene)
+    path = tmp_path/'receipt.json'
+    receipt = json.loads(path.read_text())
+    digest = hashlib.sha256(scene.encode()).hexdigest()
+    receipt['scene_sha256'] = digest
+    receipt['files'] = [['scene.xml', digest]]
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='extrinsic RPY|self-contained'):
         verify_nominal_receipt(tmp_path)

@@ -54,8 +54,12 @@ def verify_nominal_receipt(directory: Path) -> dict:
     if (receipt.get('schema') != 'sx-embodiments.nominal-mujoco/v2'
             or receipt.get('rotation_convention') != 'urdf-rpy-extrinsic-XYZ'):
         raise ValueError('Old or unknown nominal export: regenerate from the exact body and profile before training')
-    compiler = ET.parse(directory / 'scene.xml').getroot().find('compiler')
-    if compiler is None or compiler.get('angle') != 'radian' or compiler.get('eulerseq') != 'XYZ':
+    scene = ET.parse(directory / 'scene.xml').getroot()
+    if scene.findall('.//include'):
+        raise ValueError('Nominal owner scenes must be self-contained; regenerate before training')
+    compilers = list(scene.iter('compiler'))
+    if (len(compilers) != 1 or compilers[0].get('angle') != 'radian'
+            or compilers[0].get('eulerseq') != 'XYZ'):
         raise ValueError('Nominal scene does not preserve URDF extrinsic RPY; regenerate before training')
     if not receipt['embodiment_id']:
         raise ValueError('owner receipt needs embodiment identity')
