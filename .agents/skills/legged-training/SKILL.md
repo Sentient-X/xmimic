@@ -367,3 +367,45 @@ origin to a quaternion, show only `<visual>` geometry, and label zero display po
 The human review package is retained under `data/bones_seed/engineering-head-review`;
 `candidate/view-relative.urdf` changes only mesh URIs, with joint/inertial XML checked
 unchanged. It is a review draft, not physical or training approval.
+
+### Check physical mesh continuity across composition cuts
+
+The owner is the engineering reviewer and requires the whole model to be connected
+and visually sensible. A single URDF tree did not meet that requirement: the restored
+draft had 57 links and 56 joints, yet the shoulder meshes were visibly detached.
+Compare the original full body, corrected static upper body and composite using the
+same owner FK and literal visual geometry before changing a joint frame.
+
+The source comparison found the fixed shoulder motors, stops and holders on the
+corrected static body's `chest_link` (visual indices 5–12), outside the arm subtree
+cut. The old full body had motor geometry inside the discarded shoulder mesh. The
+composite therefore lost the fixed mounts when it replaced those arms. Sampled nearest
+visual-vertex distances were 43.818/48.516 mm in the composite, versus 0.350 mm in
+the original and approximately zero in the corrected static source. These are
+diagnostic distances, not a calibrated contact or interference test. Both source
+pitch axes already carry the approximately 15-degree tilt; adding another root
+rotation would be an unsupported repair.
+
+Restore source-owned fixed parts through shared embodiment composition, retaining
+their source frames and explicit estimate provenance. Do not draw cosmetic bridges,
+move joints to close a picture, duplicate torso inertia or infer measured per-part
+mass from a single source hull estimate. Re-render the resulting candidate, compare
+its source transforms and mass accounting, and obtain the owner's review before
+admitting that body to GPU training.
+
+### Resume publication after an external CI failure
+
+Platform PR3562 retained exact head `f7ac42707a38b9508da38266e71c47702badcb6c`.
+The image renderer check and 72 focused tests passed. Required run 42468120394 and
+generated run 42468124053 stopped on HTTP 504 while downloading protocol tooling,
+before the relevant checks ran. This is not a successful gate, published image or
+hosted run. Do not repeatedly dispatch the same checks without evidence that the
+download failure has changed.
+
+Immediately after a push, `just land` read an old PR head while its dispatcher read
+the new remote branch head; it then watched the old failed run. Compare PR head,
+remote head and the existing run's `head_sha`. Reattach the already-dispatched exact
+run and resume only its merge step after the required verdict; do not buy another CI
+run to correct stale metadata. The temporary owner worktree was snapshotted and
+removed with `tools/safe_worktree_cleanup.py`; pushed source and persistent review
+artifacts remain available.
