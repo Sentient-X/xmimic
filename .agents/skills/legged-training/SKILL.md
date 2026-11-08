@@ -723,3 +723,57 @@ bone angles, infer a joint-axis repair from the residual, or claim global
 infeasibility. Correspondence semantics and geometric feasibility remain to resolve.
 The inspected source/calibration foot-detail visual and hash receipt are retained in
 `toe-comparison-v1/visualization-v2/`; all panels label both fitted poses REJECTED.
+
+### Assess PolicyIK plus model-based URR tracking before training
+
+Research inspection on2026-11-08, not an implemented or qualified recipe:
+- PolicyIK paper: https://arxiv.org/html/2611.05372v1 (Sections4,5.2, AppendixJ).
+- Released implementation: https://github.com/Tinaliu0123/PolicyIK
+  `simulation/policyik_sim/tasks/actions.py` and `env_cfg.py`.
+- SuperMimic method and benchmark limits: https://supermimic.github.io/.
+
+PolicyIK accumulates joint references, observes reference-minus-measured joints,
+uses coarse/fine pose error and error-dependent action scale, and rewards progress
+and holding. Simulation uses PPO; physical OpenArm uses FlashSAC/HER. AppendixJ
+explicitly trains separate xArm7 policies: evidence for a reusable formulation,
+not one checkpoint transferring unchanged across morphologies. Hardware pose
+errors use encoder FK, not independent external metrology. The98.9percent simulated
+figure includes a deployment protocol;93.5percent is single-attempt. Neither is a
+full-body walking or arbitrary-embodiment guarantee.
+
+Read local boundaries before describing this as a configuration change:
+```bash
+rg -n 'floating root|floating-root' xmimic/model.py
+rg -n 'GOAL_Q_OFFSET|self.q\[fut\]|root_p|joint_names' xmimic/motion.py
+rg -n 'def _anchored_ref|def reward|def termination' xmimic/mdp.py
+sed -n '1,135p' ../glued/packages/sx-actions/sx_actions/urr.py
+```
+Observed: model loader requires one floating root; motion goals carry native q/qd;
+tracking rewards use yaw/translation anchoring and root height/tilt termination.
+URR Motion already owns sparse named Position/Pose samples, frames and time, with
+missing observations preserved. Thus direct URR fixed/mobile tracking needs an
+explicit task/state/controller boundary refactor, not a pretend floating joint or
+synthetic missing-foot targets.
+
+Proposed experiment: same URR goal contract, per-embodiment trained controllers,
+robot-owned mounts/base mobility/limits/sites; compare bounded numerical IK,
+PolicyIK-style model-free RL and the same task trained with XMimic's learned
+world model. Sample reachable configurations and compute canonical FK goals before
+adding UMI or BONES-SEED trajectory curricula. Observed source poses remain immutable;
+role/site selection and feasible task priorities are separate from source identity.
+Missing orientation is not zero, one direction is not full foot orientation, and
+human pivot geometry is not automatically a homologous robot bone frame.
+
+A learned dynamics model must condition on accumulated reference as well as measured
+state; otherwise identical state/action can produce different transitions. Retain
+analytic canonical FK for pose rewards rather than relearning known kinematics.
+Adapt static-goal progress/holding rewards for moving references, and ensure any
+near-goal action scaling cannot suppress unrelated balance corrections. Use smooth
+precision losses for imagined gradient updates and exact tolerance/contact checks
+for evaluation. These are design hypotheses, not adopted implementation choices.
+
+Stop short of a universal-checkpoint or millimetre physical claim without held-out
+embodiment tests, tracking/holding errors, delay/disturbance/contact/constraint
+measurements and external pose metrology. A world model's broad motion reward or
+low average prediction loss does not establish sub-millimetre tracking fidelity.
+The current foot-calibration failures remain rejected; learning must not erase them.
