@@ -628,3 +628,86 @@ was removed after verification, and no redundant CI or paid run was dispatched.
 
 Do not claim the last owning-layer gap is resolved by these tests. Numeric generality,
 shared ownership, full motion fidelity and physical qualification are separate evidence.
+
+### Preserve absolute foot direction with physical point pairs
+
+The 2026-11-08 foot review found that first-pose-fitted foot orientation offsets
+could hide a wrong heading. The historical `urr-profile-v3` frame-zero orientation
+residual was near zero while physical foot-forward versus observed ankle-to-ball
+angles were110.50degrees left and98.26degrees right. Those different vectors are
+not the metric to use for a corrected ankle-to-toe comparison.
+
+Inspect literal owner CAD before changing frames. Both feet point toward local+X;
+there is no supporting evidence for a per-foot90/180degree correction. Source
+ankle-to-ball slopes downward, so treating it as horizontal sole-forward creates
+another mismatch. The owner added fixed `left_toe_edge`/`right_toe_edge` sites at
+literal40mm front sole-edge midpoints (zero distance to the edge) in shared leg
+modules, commit`aa3c97f421a961ff4ede1cb5518ece7e25efba78` (13tests pass).
+Body`1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c`
+retains approved URDF`e7fd42a06794c5d3fce549e55630ea0a9194eee04411b7f06a9d7ed5ada87e67`;
+removing only the two new sites restores`eb249c`. No geometry, joint, limit or
+hardware acceptance changed.
+
+Use existing generic `Direction`: observed `Foot→ToeEnd` corresponds to physical
+ankle→toe-edge. Exclude feet from fitted orientation offsets. The obsolete
+`SiteAxis` prototype is retained in experiment history only; shared forward-revert
+`c3b1d5b63a8acf8a02b9bc478634f01d195518b8` restores the7507actions source tree.
+One point-pair direction does not determine full sole orientation, contact or slip.
+
+The viewer's `raw_direction_metrics` independently compares actual MuJoCo FK
+point-pairs to unchanged source pairs for every source frame, including frames
+omitted from display sampling. Gravity-plane heading is null when undefined.
+For before/after evidence use the same physical endpoints and observed source pair
+on both trajectories. A retrospective CAD-site measurement on an older body must
+record its original candidate identity separately from the reference semantic body
+and verify identical URDF geometry; never relabel or rewrite an old artifact.
+
+```bash
+# Exact toe-sites-v1/owner and compatible shared sources first on PYTHONPATH;
+# SX_EMBODIMENTS_ASSETS selects its verified asset closure. Do not sync the venv.
+python -m examples.sentient_nominal --source SOURCE.bvh \
+  --embodiment-document toe-sites-v1/embodiment.json --output NEW_PROFILE
+python -m pytest -q tests/test_retarget_direction_frames.py \
+  tests/test_retarget_generality.py tests/test_render_retarget.py
+```
+
+Observed at this stage:24tests pass. The first new calibration stopped after4steps
+with large residuals. Finite-difference diagnosis found a nonzero projected gradient
+(norm0.0988573): clipped unconstrained damped-least-squares steps all increased
+residual, while a feasible projected-gradient step reduced norm0.32032439→0.29104.
+Retain this rejected diagnostic; do not adjust named joint seeds or tolerance to
+hide an optimizer failure. Source vectors remain immutable, limits unchanged, and
+only complete accepted motion may proceed toward training admission.
+
+
+The projected-gradient correction now has a reachable planar regression:
+`python -m pytest -q tests/test_retarget_bounds.py`. Old code stopped immediately
+at `[2,-2,.3]` with2.666m error; the generic correction reaches independently known
+`[1.1,.6,.3]` within unchanged bounds/holds/tolerances. It fixes false stationarity,
+not global feasibility. No SciPy runtime dependency was added.
+
+New `toe-retarget-v2` calibration remains rejected after120iterations: toe errors
+1.54/1.66degrees, leg errors9.56–11.30degrees. The identical point-pair metric on
+old frame zero was107.36/94.05degrees; its full599-frame means were98.62/92.12degrees.
+Private `toe-comparison-v1/previous-candidate.json` binds both semantic body IDs,
+the common URDF and all599measurements. Do not call this a new full-clip success.
+Independent bounded least-squares diagnosis validates the analytic Jacobian to
+6.42e-11; two starts reach the same local leg/toe compromise, with both terminal
+ankle coordinates at±25degrees. One start converges in14evaluations with arms and
+chest nearzero, legs9.66–11.24degrees, toes1.26/1.34degrees. This separates slow
+optimization from a remaining local kinematic-fit limitation; it does not prove
+global infeasibility. The diagnostic, retained-state source hashes and script live
+under `foot-direction-audit/bounded-least-squares-diagnosis.json` and
+`bounded_least_squares_diagnosis.py`.
+
+Aggregate affected check:91passed,5skipped,32subtests across retarget source, Motion,
+target, generality, physical direction frames, bounds, workflow, progress, quality
+and viewer tests. Skips reflect the installed `sx_training.artifacts` dependency
+being absent; they are not hosted-training verification. No new full-clip motion,
+GPU execution or training admission was produced from rejected calibration.
+
+| Failure | Cause established by this run | Correction/boundary |
+| --- | --- | --- |
+| Small fitted foot-orientation error but wrong visible heading | Arbitrary first-pose offset redefined desired heading | Map observed source point-pair to physical canonical point-pair; independently audit raw directions |
+| New solve stopped after4iterations | Clipped unconstrained step was not a descent step despite nonzero projected gradient | Generic feasible gradient fallback; reachable independent regression |
+| Better toe direction with10–11degree leg errors | Two bounded local fits reach the same compromise with terminal ankle limits active | Preserve rejection and model-limit evidence; do not fabricate a training recipe, widen bounds or crop frames |

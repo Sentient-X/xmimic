@@ -194,8 +194,9 @@ Changing robot proportions preserves these source bytes. Requalification carries
 forward without modifying the original cache.
 
 `MotionBinding` resolves source roles to sites owned by the selected embodiment.
-The Sentient example uses chest, shoulder, elbow, wrist, hip, knee and ankle sites;
-it fits eight limb directions plus chest/hand/foot orientation. Physical sites compose
+The Sentient example uses chest, shoulder, elbow, wrist, hip, knee, ankle and toe sites;
+it fits eight limb directions, two ankle-to-toe directions and chest/hand orientation.
+Physical sites compose
 with the shared modules. A new body still needs an explicit semantic correspondence,
 frame calibration and supported simulation/control projection. This is not automatic
 anatomy discovery or a claim that every legged embodiment is qualified.
@@ -216,17 +217,53 @@ A narrow numerical acceptance result is not evidence of faithful motion.
 Direction errors now participate in optimization, convergence, frame-journal recovery,
 nominal quality and visualization. Journal v2 retains those errors; explicit v1 reading
 supports only old zero-direction executions. Nominal projection cannot erase a failed
-direction objective. First-pose calibration fits all eight directions before assigning
-hand/foot frame offsets, rather than aligning a demonstrated bent leg to neutral feet.
+direction objective. First-pose calibration fits the declared physical point-pair
+directions before assigning hand/chest frame offsets. Feet have no fitted orientation
+offset: that would absorb a wrong initial foot heading into the target itself.
 This nominal calibration does not establish sole contact, no-slip, collision clearance,
 balance or a trained policy. XMimic still needs derived joint references for its current
 tracker; the unchanged URR source remains available for a future direct task-space
 controller consumer.
 
-Complete-clip validation remains unsuccessful: the corrected-calibration599-frame run
+The historical eight-direction, fitted-foot-orientation599-frame run
 passed geometric goals on7frames, with maximum limb-direction63.34degrees and
 orientation52.90degrees. It failed direction, orientation and speed checks and retained
-only diagnostic output plus the unchanged URR source. No GPU training was started.
+only diagnostic output plus the unchanged URR source. Its fitted foot offsets also
+hid incorrect absolute heading, so small foot orientation residuals were misleading.
+No GPU training was started.
+
+Owner revision `aa3c97f421a961ff4ede1cb5518ece7e25efba78` adds two fixed toe sites
+at the midpoints of the literal front sole edges, producing body
+`1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c`.
+The approved URDF remains unchanged; removing those two sites restores `eb249c`.
+The example maps observed `Foot→ToeEnd` to physical ankle→toe-edge directions
+using the existing generic `Direction` constraint. These landmarks belong to the
+shared leg modules. No joint-name conditional, per-foot rotation, new toe joint or
+fitted foot offset is used by the solver. An ankle-to-toe line slopes down and must
+not be treated as a horizontal sole axis; one direction also cannot determine full
+sole orientation or contact.
+
+The viewer independently measures every source frame with MuJoCo FK. Its
+`raw_direction_metrics` compare actual physical point-pair directions to unchanged
+observed source directions, including both 3D angle and gravity-plane heading.
+These measurements use no fitted orientation offsets, and remain full-frame even
+when the display samples a lower frame rate. Undefined projected headings are null.
+
+The same-metric retrospective audit of the old599-frame trajectory found mean
+ankle-to-toe angular errors98.62degrees left and92.12degrees right. On frame zero,
+errors107.36/94.05degrees become1.54/1.66degrees in the new calibration. This is
+only a single-frame improvement: the new calibration remains rejected, with
+leg-direction errors9.56–11.30degrees. A separate bounded least-squares diagnostic
+from two starts also retained approximately10–11degree leg errors while both
+terminal ankle coordinates reached their25degree limits. These local fits do not
+prove global infeasibility or justify changing canonical limits. No new full-clip
+cache or training admission was produced.
+
+A generic numerical correction prevents false convergence when clipping an
+unconstrained least-squares step at a joint limit destroys descent. A projected
+gradient fallback can progress while preserving exact bounds and holds. A separate
+reachable planar fixture reproduces the old stall and verifies the correction;
+it does not establish that the real humanoid target is feasible.
 
 ### Generality is an acceptance condition
 

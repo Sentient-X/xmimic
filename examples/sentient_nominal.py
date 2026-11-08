@@ -32,12 +32,11 @@ from xmimic.retarget_target import Direction, IKConfig, Landmark, TargetKind, Ta
 from xmimic.retarget_workflow import RetargetRecipe
 from xmimic.retarget_quality import NominalQuality, geometry_lowest_z
 
-# Same approved geometry; eight owner-defined pivot sites add semantic identity.
-EXPECTED_BODY = 'eb249c00dcff12dc212db1e6122df0ea4f13d57f17fc90d4c4a8855051e036f5'
+# Same approved geometry; owner-defined pivot and CAD toe sites add semantic identity.
+EXPECTED_BODY = '1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c'
 # Nominal anatomical correspondence: source +Z forward, +X left, +Y up.
 WORLD_FROM_SOURCE = ((0.,0.,1.,0.),(1.,0.,0.,0.),(0.,1.,0.,0.),(0.,0.,0.,1.))
-TARGETS = (('Chest','chest'),('LeftHand','left_wrist'),('RightHand','right_wrist'),
-           ('LeftFoot','left_ankle'),('RightFoot','right_ankle'))
+TARGETS = (('Chest','chest'),('LeftHand','left_wrist'),('RightHand','right_wrist'))
 SUPPORTS = ('left_foot2_link','right_foot2_link')
 # Declared source/site correspondence and experiment constraints, not inferred anatomy.
 CHAINS = (
@@ -45,6 +44,8 @@ CHAINS = (
     (('RightArm','RightForeArm','RightHand'),('right_shoulder','right_elbow','right_wrist')),
     (('LeftLeg','LeftShin','LeftFoot'),('left_hip','left_knee','left_ankle')),
     (('RightLeg','RightShin','RightFoot'),('right_hip','right_knee','right_ankle')),
+    (('LeftFoot','LeftToeEnd'),('left_ankle','left_toe_edge')),
+    (('RightFoot','RightToeEnd'),('right_ankle','right_toe_edge')),
 )
 SCALE_CHAINS = (('LeftLeg','LeftShin','LeftFoot'), ('RightLeg','RightShin','RightFoot'))
 REFERENCE_ORIENTATION_ROLES = ('Chest',)
@@ -211,11 +212,12 @@ def build_example(source: bytes, output: Path, *, body: Embodiment | None = None
         'source_pose_calibration_frame':0,'root_orientation_assumption':'first observed Hips orientation corresponds to upright forward robot root','root_height_m':root_height,
         'scale_chains':SCALE_CHAINS,'reference_orientation_roles':REFERENCE_ORIENTATION_ROLES,
         'support_heights_m':{c.link:c.height_m for c in contacts},
-        'anatomical_scaling':'Eight source unit bone directions constrained against owner-defined physical sites through shared URR MotionBinding; no fixed root anchors or endpoint targets. Root translation scale uses hip-pitch-to-knee-to-foot lengths.',
+        'anatomical_scaling':'Observed source point-pair directions constrained against corresponding owner-defined physical sites through shared URR MotionBinding, including ankle-to-toe. Root translation scale uses the explicitly declared scale chains.',
+        'toe_correspondence':'Observed ankle-to-ToeEnd directions map to canonical ankle-to-front-sole-edge-midpoint directions. No fitted foot orientation offset, inferred sole normal or ground-contact label.',
         'hand_orientation_calibration':'One source sample fitted to declared direction/reference-orientation constraints from the supplied nominal state; only coordinates outside binding ancestry are held. Fitted site-frame offsets are nominal, not measured tool/contact calibration.',
         'first_pose_fit_sha256':hashlib.sha256((output/'first-pose-fit.json').read_bytes()).hexdigest(),
         'first_pose_direction_max_rad':float(fitted.direction_residual_rad.max()),
-        'retarget_scope':'Eight limb directions plus chest/hand/foot orientations; torso/waist free, fingers held, passive neck/head fixed. Diagnostic only until whole-pose and visual review; no collision/contact/balance qualification',
+        'retarget_scope':'Eight limb directions and two observed ankle-to-toe directions plus chest/hand orientations; torso/waist free, unobserved native coordinates held, passive coordinates explicit. Diagnostic only until whole-pose and visual review; no collision/contact/balance qualification',
         'training_admitted':False}
     (output/'calibration.json').write_text(canonical_json(calibration))
     return body, recipe, calibration
