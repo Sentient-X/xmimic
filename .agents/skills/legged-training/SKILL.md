@@ -1009,3 +1009,25 @@ manifest-purpose mismatch, unknown service outcome or archive larger than1GiB;
 shard explicitly before any new publication. Preserve licensed source and exact
 logical archive inventories, including empty source files. Verify readback before
 claiming durable evidence. This procedure does not authorize a new training run.
+
+Publisher correction278b63f was independently checked against the two reproduced
+preservation failures. Its13tests passed; separate probes rejected missing cells,
+broken request/result links, changed assets and owner URDF before archiving,
+preserved a competing destination byte-for-byte, and recovered exact staging bytes
+from interruptions both before and after a successful hard-link seal. No network
+publication was performed by this correction review. Evidence is retained under
+`data/stationary-benchmark/publisher-review-v1/{probe.py,results.log,correction.py,correction.log}`.
+
+```bash
+# Requires the merged sx_training.artifacts owner on PYTHONPATH.
+python -m pytest -q tests/test_publish_urr_benchmark.py
+```
+
+| Publisher failure | Proven cause | Corrected behavior |
+| --- | --- | --- |
+| Incomplete or changed screening accepted as complete | Trusted complete=true and supplied cells without validating linked receipts and prepared asset closure | Verify request/result/report hashes, exact requested cells, executed source hashes, prepared scene/owner/assets and evaluation task identities/counts before archiving |
+| Concurrent destination replaced while sealing an archive | Existence check followed by overwriting rename | Atomic no-clobber hard link; verify a competing destination and preserve it on mismatch; reverify known complete staging bytes before recovery |
+
+A corrupt or unknown staging file remains a refusal, not permission to overwrite
+retained evidence. Archive verification and successful local correction do not
+mint training admission or substitute for Catalog readback of a newly published pack.
