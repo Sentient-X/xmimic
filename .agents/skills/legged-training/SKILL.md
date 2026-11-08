@@ -1064,3 +1064,14 @@ PYTHONPATH failed because the installed SDK predates artifacts; use the retained
 `data/native-baselines/runtime-owner-f0607b1/packages/` roots and source-receipt.json
 instead of changing the shared environment. No new cohort archive or publication
 was created during this implementation/test pass.
+
+After bounded review of41d7022, actual local preparation of the completed corrected
+cohort produced `data/stationary-benchmark/vector-million-reward-v3-catalog/`:
+8objects/72,138,011bytes,6archives/1,960logical files,12complete final checkpoints
+and10members from both replay directories. Manifest
+`eb3187da1c57fd2c5e9052467f864bf82d3781fe241ceca61a1f2ba0e635f199` is EVALUATION/false.
+Independent manifest/object/archive verification passed;9first-screening publication
+files remained byte-identical. `vector-million-reward-v3-preparation.json` records
+all hashes and totals. This is local preparation only, **not Catalog publication or
+readback**; retain that distinction until the owning authenticated publisher returns
+and verifies its new receipt.
