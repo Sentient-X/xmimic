@@ -2,6 +2,8 @@
 
 SentientX embodiment support: [managed CPU retargeting, persistent cache and GPU training](docs/managed-training.md). The Sentient actuator profile is explicitly nominal for simulation; no physical qualification is claimed.
 
+Proposed URR controller work follows the [baseline comparisons and acceptance plan](docs/urr-controller-benchmarks.md): vanilla XMimic, vanilla PolicyIK, matched adaptations and component experiments before promoting a combined recipe. Comparative training has not run yet.
+
 
 SentientX's legged-embodiment integration is in progress. The first changes add
 explicit robot/contact/mirror metadata, embodiment-bound retargeted motion input,

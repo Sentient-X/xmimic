@@ -777,3 +777,46 @@ embodiment tests, tracking/holding errors, delay/disturbance/contact/constraint
 measurements and external pose metrology. A world model's broad motion reward or
 low average prediction loss does not establish sub-millimetre tracking fidelity.
 The current foot-calibration failures remain rejected; learning must not erase them.
+
+### Preserve baseline behavior when combining training recipes
+
+The owner made comparative experiments an explicit requirement on2026-11-08:
+vanilla XMimic, vanilla PolicyIK and the combined recipe must remain separately
+measurable. The intended output is precise URR execution of UMI, teleoperation and
+BONES-SEED trajectories, including gripper/hand pose and measured gripper aperture.
+Read [the benchmark plan](../../../docs/urr-controller-benchmarks.md) before changing
+the controller/training boundary. It is a specification; its evaluator and paired
+training runs are not yet implemented or executed.
+
+Native reproduction and matched-task adaptation answer different questions. A
+PolicyIK-derived controller ported to another simulator/body is not vanilla PolicyIK;
+an XMimic-derived fixed-base URR controller is not vanilla XMimic. Retain upstream
+protocols first, then label and control adaptations. Preserve seed/task/split pairing,
+predeclare metrics and practical non-inferiority margins, and report inconclusive
+intervals explicitly. Never infer no regression from higher aggregate reward or
+one favorable seed. Evaluate each required capability and absolute task acceptance.
+
+Useful current boundary checks:
+```bash
+rg -n 'def observed_frame|apertures|def select' ../glued/packages/sx-actions/sx_actions/urr.py
+rg -n 'floating root|floating-root' xmimic/model.py
+rg -n 'GOAL_Q_OFFSET|self.q\[fut\]' xmimic/motion.py
+git diff --check
+```
+Observed: shared URR already carries metric apertures and explicitly framed pose
+observations through `observed_frame`. This is not an episode importer or closed-loop
+aperture-policy qualification. Current XMimic still uses a floating-root/native-joint
+reference boundary. Keep missing aperture distinct from zero and teleoperator commands
+distinct from measured motion; joint-only source episodes need their own canonical FK.
+
+| Failure/signature | Cause or uncertainty | Required evidence/correction |
+| --- | --- | --- |
+| Combined recipe appears better because original methods were weakened | Adapted methods mislabeled as native or unequal tasks/budgets | Native reproduction plus labelled matched comparisons and component experiments |
+| Visually improved human retarget still reports10–11degree leg errors | Anatomical/pivot correspondence includes fixed offsets; not measured control error | Separate known-feasible robot tracking from source correspondence, then measure full physical task constraints |
+| Accurate hand target while gripper response/balance regresses | Aggregated reward hides coupled objectives | Per-role pose/aperture/contact/temporal metrics and all required promotion criteria |
+
+The current failed human cache stays unadmitted. Known-feasible synthetic and measured
+robot trajectories can establish baselines while correspondence is unresolved. No
+paid training, new tolerance acceptance or physical motion was performed by writing
+this plan. Stop short of claiming benchmark enforcement until the evaluator executes
+the frozen protocol and retains its complete results.
