@@ -6,12 +6,16 @@ consumes a prepared nominal projection; it never infers anatomy from joint names
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
+import copy
+import os
 import hashlib
 import json
 from pathlib import Path
 import sys
 from typing import Callable
 
+import jax
 import jax.numpy as jnp
 import mujoco
 import numpy as np
@@ -287,10 +291,11 @@ class URRPhysicsEnv:
             reward = reward - self.action_rate_weight * jnp.mean(jnp.square(action - jnp.asarray(previous_action)), axis=-1)
         return reward
 
-    def _command_reference(self, command, action, error, xp):
+    def _command_reference(self, command, action, error, xp, *, ratio=None):
         """One command transition shared by physics and differentiable imagination."""
         if self.config.precision:
-            ratio = float(self._ratio(error)) if xp is np else self._ratio(error)
+            if ratio is None:
+                ratio = np.asarray(self._ratio(error), dtype=float) if xp is np else self._ratio(error)
             gain = .1+.9*xp.clip((ratio-1)/19., 0., 1.)
         else:
             gain = xp.asarray(1.)
@@ -324,6 +329,10 @@ class URRPhysicsEnv:
         zero = jnp.zeros(shape+(3,), dtype=q.dtype)
         identity = jnp.broadcast_to(jnp.eye(3, dtype=q.dtype), shape+(3, 3))
         positions, rotations, _, _ = self.projection_kinematics.forward(zero, identity, zero, zero, q, qd)
+        return self._observation_channels(previous, action, predicted[..., :2*J], q, command, positions, rotations)
+
+    def _observation_channels(self, previous, action, physical, q, command, positions, rotations):
+        """Shared known task channels for actual MuJoCo frames and imagined FK."""
         goal = previous[..., self.goal_slice]
         errors = []
         for i, (_, offset) in enumerate(self.site_frames):
@@ -337,7 +346,7 @@ class URRPhysicsEnv:
             aperture = jnp.interp(q[..., index], jnp.asarray(xs), jnp.asarray(ys))
             errors.append((goal[..., 9*len(self.roles)+i]-aperture)[..., None])
         error = jnp.concatenate(errors, axis=-1)
-        values = [predicted[..., :2*J], (command-q)/self.scale, action, goal, error]
+        values = [physical, (command-q)/self.scale, action, goal, error]
         if self.config.precision:
             values.extend((jnp.clip(error/self.coarse, -1., 1.), jnp.clip(error/self.tolerances, -1., 1.)))
         ratio = self._ratio(error)
@@ -427,6 +436,9 @@ class URRPhysicsEnv:
             {role: Pose(state["goal_position"][i], state["goal_quaternion"][i]) for i, role in enumerate(self.roles)},
             {role: float(state["goal_aperture"][i]) for i, (role, _, _) in enumerate(self.apertures)})
 
+    def vectorize(self, num_envs):
+        return URRPhysicsBatch(self, num_envs)
+
     def ik_action(self, damping: float = .01, feedback_gain: float = .1):
         """Bounded numerical control baseline, using actual MuJoCo Jacobians."""
         jacobians, errors = [], []
@@ -457,6 +469,102 @@ class URRPhysicsEnv:
         reference = self.command if self.config.accumulate else self.nominal
         authority = self.scale if self.config.accumulate else np.maximum(self.hi - self.nominal, self.nominal - self.lo)
         return np.clip((desired - reference) / authority, -1, 1)
+
+
+class URRPhysicsBatch:
+    """Independent MuJoCo integrations sharing only immutable model/robot facts.
+
+    The bounded pool advances existing MjData in place, including warmstart and
+    solver state. Known observation channels are compiled once for the batch;
+    measured frames come from MuJoCo, never from a learned dynamics proposal.
+    """
+
+    def __init__(self, template, num_envs):
+        if type(num_envs) is not int or num_envs < 1:
+            raise ValueError('num_envs must be a positive integer')
+        if template.config.moving:
+            raise ValueError('Batched training requires stationary goals')
+        self.template, self.num_envs = template, num_envs
+        self.action_dim, self.observation_dim = template.action_dim, template.observation_dim
+        self.binding = template.binding
+        self.envs = []
+        for _ in range(num_envs):
+            env = copy.copy(template)
+            env.data = mujoco.MjData(template.model)
+            env.rng = np.random.default_rng(0)
+            self.envs.append(env)
+        self.workers = min(num_envs, 8, os.cpu_count() or 1)
+        self.pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix='urr-physics')
+        self.groups = [self.envs[i::self.workers] for i in range(self.workers)]
+        self._ratio = jax.jit(template._ratio)
+        self._channels = jax.jit(template._observation_channels)
+        self._reward = jax.jit(template.reward_from_observation)
+        self.reward_from_observation = template.reward_from_observation
+        self.project_observation = template.project_observation
+        self.observations = np.empty((num_envs, self.observation_dim), np.float32)
+
+    def reset(self, seeds):
+        seeds = np.asarray(seeds)
+        if seeds.shape != (self.num_envs,):
+            raise ValueError('One explicit seed is required per environment')
+        self.observations = np.stack([env.reset(int(seed)) for env, seed in zip(self.envs, seeds, strict=True)])
+        return self.observations.copy()
+
+    def reset_at(self, indices, seeds):
+        for index, seed in zip(indices, seeds, strict=True):
+            self.observations[index] = self.envs[index].reset(int(seed))
+        return self.observations.copy()
+
+    @staticmethod
+    def _advance(group):
+        for env in group:
+            mujoco.mj_step(env.model, env.data, nstep=env.substeps)
+            mujoco.mj_forward(env.model, env.data)
+
+    def step(self, actions):
+        t = self.template
+        actions = np.asarray(actions, dtype=float)
+        if actions.shape != (self.num_envs, self.action_dim) or not np.isfinite(actions).all():
+            raise ValueError('Actions must be a finite batch of native coordinates')
+        actions = np.clip(actions, -1., 1.)
+        previous = self.observations.copy()
+        command = np.stack([env.command for env in self.envs])
+        ratio = np.asarray(self._ratio(previous[:, t.error_slice]), dtype=float) if t.config.precision else None
+        command = t._command_reference(command, actions, previous[:, t.error_slice], np, ratio=ratio)
+        for env, reference, action in zip(self.envs, command, actions, strict=True):
+            env.command = reference.copy()
+            env.previous_action = action.copy()
+            env.data.ctrl[env.controls] = reference
+        # Consume every future so exceptions cannot masquerade as completed work.
+        list(self.pool.map(self._advance, self.groups))
+        q = np.stack([env.data.qpos[t.qadr] for env in self.envs])
+        qd = np.stack([env.data.qvel[t.vadr] for env in self.envs])
+        ids = [body_id for body_id, _ in t.site_frames]
+        positions = np.stack([env.data.xpos[ids] for env in self.envs])
+        rotations = np.stack([env.data.xmat[ids].reshape(-1, 3, 3) for env in self.envs])
+        physical = np.concatenate(((q-(t.hi+t.lo)/2)/((t.hi-t.lo)/2), qd*t.control_dt/t.scale), axis=-1)
+        self.observations = np.asarray(self._channels(previous, actions, physical, q, command, positions, rotations)).copy()
+        rewards = np.asarray(self._reward(self.observations, previous[:, 3*t.action_dim:4*t.action_dim]))
+        for env, obs in zip(self.envs, self.observations, strict=True):
+            env.steps += 1
+            env.best, env.progress = float(obs[-3])*100., float(obs[-2])
+            env.dwell = round(float(obs[-1])*env.config.hold_steps)
+        done = np.asarray([env.steps >= env.config.episode_steps for env in self.envs])
+        warnings = np.asarray([sum(w.number for w in env.data.warning) for env in self.envs])
+        return self.observations.copy(), rewards, done, {'physics_warning_count': warnings}
+
+    def state(self):
+        states = [env.state() for env in self.envs]
+        return {**{key: np.stack([state[key] for state in states]) for key in states[0]},
+                'batch_observations': self.observations.copy()}
+
+    def restore(self, state):
+        for index, env in enumerate(self.envs):
+            env.restore({key: value[index] for key, value in state.items() if key != 'batch_observations'})
+        self.observations = np.asarray(state['batch_observations']).copy()
+
+    def close(self):
+        self.pool.shutdown(wait=True)
 
 
 def evaluate(env_factory: Callable[[], URRPhysicsEnv], policy, seeds: list[int], output: Path, *, policy_identity: str | None = None):

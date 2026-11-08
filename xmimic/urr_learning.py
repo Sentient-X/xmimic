@@ -54,12 +54,13 @@ class LearningConfig:
     wm_updates: int = 8
     imagination_horizon: int = 8
     gradient_clip: float = 1.
+    num_envs: int = 1
 
     def __post_init__(self):
         object.__setattr__(self, 'hidden', tuple(self.hidden))
         if type(self.seed) is not int or self.seed < 0:
             raise ValueError('seed must be a non-negative integer')
-        for name in ('iterations', 'rollout_steps', 'ppo_epochs', 'replay_capacity', 'batch_size', 'wm_updates', 'imagination_horizon'):
+        for name in ('iterations', 'rollout_steps', 'ppo_epochs', 'replay_capacity', 'batch_size', 'wm_updates', 'imagination_horizon', 'num_envs'):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f'{name} must be positive')
         if not self.hidden or any(type(x) is not int or x < 1 for x in self.hidden):
@@ -95,8 +96,8 @@ def _initial(config, observation_dim, action_dim, environment_state):
     return dict(pi=pi, value=value, wm=wm, wm_buf=wm_buf,
                 opt_pi=optim.init(pi, _mask(pi)), opt_value=optim.init(value, _mask(value)),
                 opt_wm=optim.init(wm, _mask(wm)), obs_norm=nets.rn_init(observation_dim),
-                key=keys[3], it=np.array(0, np.int64), resets=np.array(0, np.int64),
-                physics_steps=np.array(0, np.int64), obs=np.zeros(observation_dim, np.float32),
+                key=keys[3], it=np.array(0, np.int64), resets=np.zeros(config.num_envs, np.int64) if config.num_envs > 1 else np.array(0, np.int64),
+                physics_steps=np.array(0, np.int64), obs=np.zeros((config.num_envs, observation_dim) if config.num_envs > 1 else observation_dim, np.float32),
                 env=environment_state, replay_obs=np.zeros((n, observation_dim), np.float32),
                 replay_action=np.zeros((n, action_dim), np.float32),
                 replay_next=np.zeros((n, observation_dim), np.float32),
@@ -174,6 +175,19 @@ def _kernels(config, reward, action_dim, project=None):
     return ppo, fit, imagined
 
 
+def _advantages(rewards, dones, values, next_values, config):
+    """Time recurrence is independent for each lane; flatten only afterward."""
+    batched = config.num_envs > 1
+    advantage = np.zeros((config.rollout_steps, config.num_envs) if batched else config.rollout_steps, np.float32)
+    running = 0.
+    for index in range(config.rollout_steps-1, -1, -1):
+        alive = 1-np.asarray(dones[index], dtype=np.float32) if batched else 1-float(dones[index])
+        delta = rewards[index]+config.gamma*alive*next_values[index]-values[index]
+        running = delta+config.gamma*config.gae_lambda*alive*running
+        advantage[index] = running
+    return advantage, advantage+np.asarray(values, np.float32)
+
+
 def _program():
     return {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in
             (Path(__file__), Path(nets.__file__), Path(optim.__file__), Path(checkpoint.__file__))}
@@ -188,14 +202,14 @@ def _binding(env, config, method, precision, state):
                              matrix_output=str(nets.MM_OUT), x64=bool(jax.config.jax_enable_x64)))
 
 
-def _observation(value, size):
+def _observation(value, size, num_envs=1):
     result = np.asarray(value, np.float32)
-    if result.shape != (size,) or not np.isfinite(result).all():
+    if result.shape != ((num_envs, size) if num_envs > 1 else (size,)) or not np.isfinite(result).all():
         raise ValueError('environment returned an invalid observation')
     return result.copy()
 
 
-def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'world_model'], precision: bool,
+def _train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'world_model'], precision: bool,
           config: LearningConfig, output: Path, resume_from: Path | None = None,
           stop_requested: Callable[[], bool] | None = None) -> TrainingResult:
     if method not in ('ppo', 'world_model') or type(precision) is not bool:
@@ -203,14 +217,17 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     env = env_factory()
-    obs = _observation(env.reset(config.seed), env.observation_dim)
+    N = config.num_envs
+    batched = N > 1
+    seeds = config.seed+np.arange(N) if batched else config.seed
+    obs = _observation(env.reset(seeds), env.observation_dim, N)
     env_state = {k:np.asarray(v).copy() for k,v in env.state().items()}
     project = None
     if method == 'world_model':
         project = env.project_observation
         # Refuse missing/nonstationary state before collecting paid transitions.
-        projected = project(jnp.asarray(obs), jnp.zeros(env.action_dim), jnp.asarray(obs))
-        _observation(projected, env.observation_dim)
+        projected = project(jnp.asarray(obs), jnp.zeros((N, env.action_dim) if batched else env.action_dim), jnp.asarray(obs))
+        _observation(projected, env.observation_dim, N)
     binding = _binding(env, config, method, precision, env_state)
     carry = _initial(config, env.observation_dim, env.action_dim, env_state)
     carry['obs'] = obs
@@ -236,42 +253,42 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
             latent = mean+jnp.exp(jnp.clip(carry['pi']['log_std'], -5., 1.))*jax.random.normal(sample_key, mean.shape)
             action = np.asarray(jnp.tanh(latent))
             following, reward, done, _ = env.step(action)
-            following = _observation(following, env.observation_dim)
-            if not np.isfinite(reward):
+            following = _observation(following, env.observation_dim, N)
+            if not np.isfinite(reward).all():
                 raise ValueError('environment returned a nonfinite reward')
             observations.append(obs)
             latents.append(np.asarray(latent))
-            rewards.append(float(reward))
-            dones.append(bool(done))
-            logps.append(float(_logprob(carry['pi'], mean, latent)))
-            values.append(float(_value(carry['value'], carry['obs_norm'], obs)))
-            next_values.append(float(_value(carry['value'], carry['obs_norm'], following)))
-            index = int(carry['replay_cursor'])
-            for name, value in (('obs', obs), ('action', action), ('next', following), ('reward', reward), ('done', done)):
-                carry['replay_'+name][index] = value
-            carry['replay_cursor'] = np.array((index+1)%config.replay_capacity, np.int64)
-            carry['replay_size'] = np.array(min(config.replay_capacity, int(carry['replay_size'])+1), np.int64)
-            carry['physics_steps'] += 1
-            if done:
+            rewards.append(np.asarray(reward).copy() if batched else float(reward))
+            dones.append(np.asarray(done).copy() if batched else bool(done))
+            logps.append(np.asarray(_logprob(carry['pi'], mean, latent)) if batched else float(_logprob(carry['pi'], mean, latent)))
+            values.append(np.asarray(_value(carry['value'], carry['obs_norm'], obs)) if batched else float(_value(carry['value'], carry['obs_norm'], obs)))
+            next_values.append(np.asarray(_value(carry['value'], carry['obs_norm'], following)) if batched else float(_value(carry['value'], carry['obs_norm'], following)))
+            for lane in range(N):
+                index = int(carry['replay_cursor'])
+                for name, value in (('obs', obs), ('action', action), ('next', following), ('reward', reward), ('done', done)):
+                    carry['replay_'+name][index] = value[lane] if batched else value
+                carry['replay_cursor'] = np.array((index+1)%config.replay_capacity, np.int64)
+                carry['replay_size'] = np.array(min(config.replay_capacity, int(carry['replay_size'])+1), np.int64)
+            carry['physics_steps'] += N
+            if batched:
+                indices = np.flatnonzero(done)
+                carry['resets'][indices] += 1
+                if len(indices):
+                    following = _observation(env.reset_at(indices, config.seed+indices+N*carry['resets'][indices]), env.observation_dim, N)
+            elif done:
                 carry['resets'] += 1
                 following = _observation(env.reset(config.seed+int(carry['resets'])), env.observation_dim)
             carry['obs'] = following
-        obs_batch = jnp.asarray(np.asarray(observations))
+        obs_batch = jnp.asarray(np.asarray(observations).reshape(-1, env.observation_dim))
         detail = dict(mean_reward=float(np.mean(rewards)))
         if method == 'ppo':
-            advantage = np.zeros(config.rollout_steps, np.float32)
-            running = 0.
-            for index in range(config.rollout_steps-1, -1, -1):
-                alive = 1-float(dones[index])
-                delta = rewards[index]+config.gamma*alive*next_values[index]-values[index]
-                running = delta+config.gamma*config.gae_lambda*alive*running
-                advantage[index] = running
-            returns = advantage+np.asarray(values, np.float32)
+            advantage, returns = _advantages(rewards, dones, values, next_values, config)
             advantage = (advantage-advantage.mean())/(advantage.std()+1e-8)
             for _ in range(config.ppo_epochs):
                 carry['pi'], carry['value'], carry['opt_pi'], carry['opt_value'], pl, vl = ppo(
                     carry['pi'], carry['value'], carry['opt_pi'], carry['opt_value'], carry['obs_norm'],
-                    obs_batch, jnp.asarray(np.asarray(latents)), jnp.asarray(logps), jnp.asarray(advantage), jnp.asarray(returns))
+                    obs_batch, jnp.asarray(np.asarray(latents).reshape(-1, env.action_dim)), jnp.asarray(np.asarray(logps).reshape(-1)),
+                    jnp.asarray(advantage.reshape(-1)), jnp.asarray(returns.reshape(-1)))
             detail.update(policy_loss=float(pl), value_loss=float(vl))
         else:
             size = int(carry['replay_size'])
@@ -308,13 +325,32 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
                for index, row in enumerate(carry['metric_history'][:int(carry['it'])])]
     receipt = dict(method=('PolicyIK-derived matched PPO' if method=='ppo' else 'XMimic-derived matched world model'),
                    dynamics_model='physical-q-qd/canonical-observation-v1' if method=='world_model' else None,
-                   precision=precision, iterations=int(carry['it']), physics_steps=int(carry['physics_steps']),
+                   precision=precision, num_envs=N, iterations=int(carry['it']), physics_steps=int(carry['physics_steps']),
                    completed=int(carry['it'])==config.iterations, checkpoint=str(latest), metrics=metrics,
                    elapsed_seconds=elapsed+time.monotonic()-began,
                    scope='CPU-capable matched adaptation, not vanilla reproduction or physical qualification',
                    differences=['common stationary URR environment', 'small MLPs', 'Adam optimizer', 'tanh-bounded Gaussian exploration',
                                 'finite-horizon learned-model policy gradient without critic bootstrap' if method=='world_model' else 'full-rollout clipped PPO/GAE batches'])
     return TrainingResult(latest, receipt)
+
+
+def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'world_model'], precision: bool,
+          config: LearningConfig, output: Path, resume_from: Path | None = None,
+          stop_requested: Callable[[], bool] | None = None) -> TrainingResult:
+    """Collect real scalar or batched transitions, always disposing worker pools."""
+    env = env_factory()
+    if env.binding.get('task', {}).get('partition') == 'evaluation':
+        raise ValueError('Evaluation task partition cannot collect learning transitions')
+    if config.num_envs > 1:
+        if not hasattr(env, 'vectorize'):
+            raise ValueError('This environment does not implement batched real physics')
+        env = env.vectorize(config.num_envs)
+    try:
+        return _train(lambda: env, method=method, precision=precision, config=config, output=output,
+                      resume_from=resume_from, stop_requested=stop_requested)
+    finally:
+        if config.num_envs > 1:
+            env.close()
 
 
 def load_policy(path: Path) -> Callable[[np.ndarray], np.ndarray]:
