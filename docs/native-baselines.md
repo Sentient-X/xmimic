@@ -76,3 +76,19 @@ back through the public authenticated Catalog client and matched byte-for-byte.
 This proves input custody, not completed native training or evaluation. Submit only
 through the existing authored training Job API/CLI with the correct purpose,
 immutable image, explicit idempotency key, deadline and spending cap.
+
+After a native XMimic training Job succeeds, run the same preparation command with
+`--training-job-id <retained Job ID>`. The helper reads that Job and its immutable
+owner result, verifies the original input pack, complete 35-checkpoint inventory and
+native/owner receipts, and composes an evaluation-only pack from existing Catalog
+references. It downloads only the two manifests and two small proof documents;
+checkpoint bytes stay in Catalog custody. Only the new evaluation manifest is uploaded.
+The private pack retains lineage to both original inputs and training outputs.
+
+This handoff requires Catalog's asset-pack `ReadAsset` capability and the SDK's direct
+`AssetRef` registration support. Its local `composition.json` journal records intent
+before pack registration and lineage writes. Lost acknowledgements reconcile against
+exact public readbacks; absent or conflicting state refuses rather than resubmitting.
+Keep the original input publication journal and the composition directory. Sixteen
+local helper tests cover integrity, full-checkpoint refusal and acknowledgement-loss
+recovery; hosted composition and native evaluation still need their own receipts.
