@@ -177,10 +177,15 @@ def managed_fixture(tmp_path, monkeypatch, child, *, linked_mounts=False):
 
     selected = source(tmp_path, [("script.py", tarfile.REGTYPE, child.encode())])
     if linked_mounts:
-        for name in ("data", "runs", "cache"):
+        for name in ("data", "cache"):
             physical = tmp_path / "provider-targets" / name
             physical.mkdir(parents=True)
             (tmp_path / name).symlink_to(physical, target_is_directory=True)
+        runs = tmp_path / "runs"
+        runs.mkdir()
+        physical_run = tmp_path / "provider-targets/job-run"
+        physical_run.mkdir()
+        (runs / ("a" * 32)).symlink_to(physical_run, target_is_directory=True)
     data = tmp_path / "data"
     (data / "inputs").mkdir(parents=True)
     archive = data / "inputs/source.tar.gz"
@@ -438,11 +443,13 @@ def test_native_custody_survives_provider_mount_aliases_and_target_rebinding(
     assert str(tmp_path / "runs").encode() in journal
     assert b"provider-targets" not in journal
     # A new Sandbox can bind the same durable volume at a different physical target.
-    old_target = (tmp_path / "runs").resolve()
+    assert context.run_dir.is_symlink()
+    assert not context.run_dir.parent.is_symlink()
+    old_target = context.run_dir.resolve()
     new_target = old_target.with_name("next-generation-runs")
     old_target.rename(new_target)
-    (tmp_path / "runs").unlink()
-    (tmp_path / "runs").symlink_to(new_target, target_is_directory=True)
+    context.run_dir.unlink()
+    context.run_dir.symlink_to(new_target, target_is_directory=True)
     resumed = TrainingContext(
         execution_bytes(context.inputs, context.trainer),
         data_root=context.data_root,
