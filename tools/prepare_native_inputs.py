@@ -380,7 +380,10 @@ def compose_evaluation(
             for a in assets
         }
 
+        checked_refs = False
+
         def pack_matches():
+            nonlocal checked_refs
             pack = read_pack(entry)
             if pack is None:
                 return False
@@ -393,6 +396,15 @@ def compose_evaluation(
                 != expected
             ):
                 raise ValueError("Registered evaluation pack membership differs")
+            if not checked_refs:
+
+                def read_back(ref):
+                    if catalog.read_asset(entry, ref.content.sha256).asset != ref:
+                        raise ValueError("Registered evaluation AssetRef changed")
+
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    tuple(pool.map(read_back, assets))
+                checked_refs = True
             return True
 
         if state["phase"] == "registering":

@@ -224,6 +224,7 @@ def composition_fixture(tmp_path, monkeypatch):
                     for a in assets
                 ],
             }
+            refs.update({(entry, str(a.sha256)): a for a in assets})
             self.retained_assets = assets
             if self.fail == "pack":
                 self.fail = None
@@ -370,3 +371,22 @@ def test_linked_composition_directory_never_writes_outside(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="Linked composition"):
         prepare.compose_evaluation(catalog, publisher, **args)
     assert list(outside.iterdir()) == [] and not publisher.promoted
+
+
+def test_composition_refuses_changed_uri_even_when_content_metadata_matches(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+
+    catalog, publisher, args, refs, *_ = composition_fixture(tmp_path, monkeypatch)
+    original = catalog.register_asset_pack
+
+    def changed(entry, assets):
+        original(entry, assets)
+        key = (entry, str(assets[0].sha256))
+        refs[key] = replace(refs[key], location="unrelated://foreign/reference")
+
+    catalog.register_asset_pack = changed
+    with pytest.raises(ValueError, match="AssetRef changed"):
+        prepare.compose_evaluation(catalog, publisher, **args)
+    assert catalog.lineage_writes == 0

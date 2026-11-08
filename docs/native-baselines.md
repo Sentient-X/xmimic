@@ -89,6 +89,6 @@ This handoff requires Catalog's asset-pack `ReadAsset` capability and the SDK's 
 `AssetRef` registration support. Its local `composition.json` journal records intent
 before pack registration and lineage writes. Lost acknowledgements reconcile against
 exact public readbacks; absent or conflicting state refuses rather than resubmitting.
-Keep the original input publication journal and the composition directory. Sixteen
+Keep the original input publication journal and the composition directory. Seventeen
 local helper tests cover integrity, full-checkpoint refusal and acknowledgement-loss
 recovery; hosted composition and native evaluation still need their own receipts.
