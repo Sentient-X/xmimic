@@ -56,3 +56,23 @@ reject unrecorded files and links. Stop handling kills the whole process group e
 when its leader exits before a SIGTERM-ignoring descendant.
 They are not native simulation results. Runtime publication, managed dispatch and
 completed native scores still require their own receipts.
+
+
+`tools/prepare_native_inputs.py` prepares the exact archived-source/task closure and
+publishes it through the existing private Catalog asset-pack client. It is not a
+launcher. Pass `--root data/native-baselines`, `--method vanilla_xmimic` (or
+`vanilla_policyik`), a persistent `--output`, the reviewed runtime's
+`--producer-revision`, and `--publish-project`. The producer revision identifies the
+worker/input contract; upstream revisions and archive checksums remain in
+`native-acquisition.json`. The preparation tool's source revision is recorded by git.
+The publication journal retains each accepted operation, so an ambiguous failure
+must be reconciled before retrying; never discard that journal.
+
+On 2026-11-08, the private project published the 77-file XMimic training closure as
+`native.vanilla_xmimic.336e2cb7281ece7c180313aa` and the two-file PolicyIK evaluation
+closure as `native.vanilla_policyik.48eb8797fd56ac0bff202bdb`. Both manifests were read
+back through the public authenticated Catalog client and matched byte-for-byte.
+`data/native-baselines/native-input-publication.json` retains their full digests.
+This proves input custody, not completed native training or evaluation. Submit only
+through the existing authored training Job API/CLI with the correct purpose,
+immutable image, explicit idempotency key, deadline and spending cap.
