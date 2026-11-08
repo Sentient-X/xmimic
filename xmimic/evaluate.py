@@ -26,7 +26,7 @@ import numpy as np
 from . import nets
 from .kin import Kinematics
 from .mdp import MAX_STEP_REWARD, MDP
-from .model import load_model
+from .model import ASSETS, contact_indices, load_model
 from .motion import GOAL_Q_OFFSET, load_motion
 from .sim import Sim
 
@@ -41,6 +41,14 @@ def load_ckpt(path):
     return params, bufs, meta
 
 
+def check_policy_config(candidate, expected):
+    """Policies batched together must have the same embodiment and observation contract."""
+    for key in ("embodiment_id", "goal_frames", "hist", "enc_hidden", "dec_hidden", "motion_format"):
+        default = "lafan1_csv" if key == "motion_format" else None
+        if candidate.get(key, default) != expected.get(key, default):
+            raise ValueError(f"checkpoint batch has incompatible {key}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
@@ -48,15 +56,20 @@ def main(argv=None):
     ap.add_argument("--every", type=int, default=1, help="evaluate every n-th checkpoint")
     ap.add_argument("--chunk", type=int, default=500, help="control steps per compiled program")
     ap.add_argument("--motion_dir", default=None, help="default: the run's own")
+    ap.add_argument("--robot_dir", default=None, help="default: the run's own robot bundle")
     ap.add_argument("--group", type=int, default=0, help="checkpoints per batch (0: all at once)")
     args = ap.parse_args(argv)
     files = sorted(glob.glob(os.path.join(args.run_dir, "ckpt_*.npz")))[:: args.every]
     assert files, args.run_dir
     cfg = json.loads(str(np.load(files[0])["meta"]))["args"]
-    mj, meta = load_model()
+    mj, meta = load_model(args.robot_dir or cfg.get("robot_dir", ASSETS), motion_format=cfg.get("motion_format", "lafan1_csv"))
+    if cfg.get("embodiment_id") != meta.get("embodiment_id"):
+        raise ValueError("checkpoint and robot bundle have different embodiment identities")
     kin = Kinematics(meta)
-    feet = [meta["tracked_bodies"].index(b) for b in ("left_ankle_roll_link", "right_ankle_roll_link")]
-    motion = load_motion(args.motion_dir or cfg["motion_dir"], kin, feet)
+    feet = contact_indices(meta)
+    motion = load_motion(args.motion_dir or cfg["motion_dir"], kin, feet,
+                         motion_format=cfg.get("motion_format", "lafan1_csv"),
+                         joint_names=meta["joint_names"], embodiment_id=meta.get("embodiment_id"))
     C = len(motion.names)
     K, Hh = cfg["goal_frames"], cfg["hist"]
     ref = (GOAL_Q_OFFSET, jnp.asarray(meta["default_joint_pos"], jnp.float32), jnp.asarray(meta["action_scale"], jnp.float32))
@@ -65,12 +78,14 @@ def main(argv=None):
     t_all = time.time()
     for grp in groups:
         cks = [load_ckpt(f) for f in grp]
+        for _, _, checkpoint_meta in cks:
+            check_policy_config(checkpoint_meta["args"], cfg)
         M, R = len(cks), args.reps
         N = M * R * C  # world n: checkpoint n // (R*C), replica (n // C) % R, clip n % C
         params = jax.tree.map(lambda *x: jnp.stack(x), *[c[0] for c in cks])
         bufs = jax.tree.map(lambda *x: jnp.stack(x), *[c[1] for c in cks])
         sim = Sim(mj, meta, N, None, eval_mode=True)
-        mdp = MDP(kin, meta["default_joint_pos"], feet, sim.layout.dim)
+        mdp = MDP(kin, meta["default_joint_pos"], feet, sim.layout.dim, contact_heights=meta["contact_heights"])
         sim.mdp = mdp
         clip_of = jnp.arange(N) % C
         model_b, st = sim.init(jax.random.PRNGKey(0), motion)

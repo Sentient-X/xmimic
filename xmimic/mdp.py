@@ -14,7 +14,6 @@ import numpy as np
 from .motion import CONTROL_DT
 from .rot import mat_to_6d, mat_to_quat, mm3, mv3, quat_to_mat, rot_angle_sq, tr3, yaw_mat
 
-CONTACT_Z = 0.045
 MAX_STEP_REWARD = (4 * 1.0 + 2 * 0.5) * CONTROL_DT
 BODY_POS_STD, BODY_ORI_STD, BODY_LINVEL_STD, BODY_ANGVEL_STD = 0.3, 0.4, 1.0, 3.14
 ROOT_POS_STD, ROOT_ORI_STD = 0.3, 0.4
@@ -57,7 +56,7 @@ class MDP:
     """Observation, reward (BeyondMimic's tracking terms plus InstantTrack's contact term), hard and soft termination, and
     the critic's privileged features."""
 
-    def __init__(self, kin, default_q, feet: list[int], xi_dim: int):
+    def __init__(self, kin, default_q, feet: list[int], xi_dim: int, *, contact_heights):
         self.kin = kin
         J = len(default_q)
         self.J, self.xi_dim = J, xi_dim
@@ -65,6 +64,7 @@ class MDP:
         mid, half = (kin.q_lo + kin.q_hi) / 2, (kin.q_hi - kin.q_lo) / 2
         self.soft_lo, self.soft_hi = mid - half * SOFT_LIMIT_FACTOR, mid + half * SOFT_LIMIT_FACTOR
         self.feet = list(feet)
+        self.contact_heights = np.asarray(contact_heights, np.float32)
         self.obs_dim = obs_dim(J)
         self.critic_extra = J + len(kin.tracked_idx) * 3 + 3 + 6 + xi_dim
         n = NOISE
@@ -108,7 +108,7 @@ class MDP:
         r = (r_track + W_ACTION_RATE * r_rate + W_JOINT_LIMIT * r_lim) * CONTROL_DT
         if w_contact > 0:
             fz = bp[..., self.feet, 2]
-            c_sim = jax.nn.sigmoid((CONTACT_Z - fz) / 0.005)
+            c_sim = jax.nn.sigmoid((self.contact_heights - fz) / 0.005)
             c_ref = motion.ref_contact[f]
             slip = (bv[..., self.feet, :2] ** 2).sum(-1)
             r_contact = (1 - (c_sim - c_ref) ** 2) + c_ref * jnp.exp(-slip / 0.3**2)

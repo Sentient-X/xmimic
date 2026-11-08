@@ -81,11 +81,14 @@ class RunLog:
     COLS = ["iteration", "wall_min", "sim_steps", "wm", "wm8", "pi", "v", "ir", "gn", "surv", "sim_r", "ep_len", "ep_ret", "term_frac",
             "it_per_s", "lr", "pi_lr", "nonfinite"]  # fmt: skip
 
-    def __init__(self, xm, cfg, t0, avg_template, args_meta, extra_cols=()):
-        self.cfg, self.t0, self.args_meta = cfg, t0, args_meta
+    def __init__(self, xm, cfg, t0, avg_template, args_meta, extra_cols=(), on_metrics=None):
+        self.cfg, self.t0 = cfg, t0
+        self.on_metrics = on_metrics
+        self.args_meta = {**args_meta, "embodiment_id": xm.meta.get("embodiment_id")}
         self.cols = self.COLS + list(extra_cols)
         self.f = open(os.path.join(cfg.log_dir, "train_log.csv"), "a")
-        self.f.write(",".join(self.cols) + "\n")
+        if self.f.tell() == 0:
+            self.f.write(",".join(self.cols) + "\n")
         self.acc, self.t_log, self.it_log, self.decay_at = [], time.time(), 0, -1
         self.unflat = make_unflat(avg_template)
         self.pool = concurrent.futures.ThreadPoolExecutor(1)
@@ -94,7 +97,8 @@ class RunLog:
         self.cpu = jax.devices("cpu")[0]
         kt1, _ = jax.random.split(jax.random.PRNGKey(1234))
         oh = 0.5 * jax.random.normal(kt1, (4, cfg.hist, xm.obs_dim))
-        g = xm.motion.goal(jnp.asarray([100, 5000, 100000, 300000], jnp.int32), cfg.goal_frames)
+        frames = np.minimum([100, 5000, 100000, 300000], xm.motion.num_frames - 1)
+        g = xm.motion.goal(jnp.asarray(frames, jnp.int32), cfg.goal_frames)
         self.test_in = jax.device_put((oh, g), self.cpu)
         self.test_act = jax.jit(lambda avg, oh, g: nets.pi_apply(avg[0], avg[1], oh, g, xm.ref))
         self.done, self.q = {}, queue.Queue()
@@ -138,6 +142,8 @@ class RunLog:
                    "pi_lr": float(s["pi_lr"][-1]), "nonfinite": int(s["nonfinite"][-1]), **(extra or {})}  # fmt: skip
             self.f.write(",".join(f"{row[k]:.6g}" if isinstance(row[k], float) else str(row[k]) for k in self.cols) + "\n")
             self.f.flush()
+            if self.on_metrics is not None:
+                self.on_metrics({k: v for k, v in row.items() if np.isfinite(v)}, it)
             probe = (f" | probe fails {int(s['ep_n_fail'][-1])}" if "ep_n_fail" in s else "") + "".join(
                 f" | {k} {v}" for k, v in (extra or {}).items())
             print(f"it {it} | {row['wall_min']:.2f} min | wm {row['wm']:.4f} e8 {row['wm8']:.4f} | pi {row['pi']:.3f} v {row['v']:.4f} "
@@ -193,3 +199,30 @@ def run_pipelined(dispatch, log, iterations, max_minutes=0.0, on_done=None):
 def write_json(path, obj):
     with open(path, "w") as f:
         json.dump(obj, f, indent=1)
+
+
+def run_synchronized(dispatch, log, iterations, *, start_iteration=0,
+                     max_minutes=0.0, checkpoint_every, checkpoint, stop_requested=lambda: False):
+    """Managed mode: finish each bounded chunk before donation, snapshot or stop.
+
+    Unlike run_pipelined this intentionally waits at boundaries. ``checkpoint(it)``
+    synchronously persists the complete state, including on time/stop termination.
+    A raised computation/log/checkpoint error propagates; it is never success.
+    """
+    it, saved = start_iteration, None
+    try:
+        while it < iterations and not stop_requested():
+            it, stats, avg_flat = dispatch()
+            jax.block_until_ready((stats, avg_flat))
+            log.submitted(it, stats)
+            minutes = log.add(it, stats, avg_flat)
+            if it % checkpoint_every == 0:
+                checkpoint(it)
+                saved = it
+            if max_minutes > 0 and minutes >= max_minutes:
+                break
+        if saved != it:
+            checkpoint(it)
+    finally:
+        log.close()
+    return it

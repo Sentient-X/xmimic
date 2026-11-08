@@ -1,0 +1,15 @@
+# Linux amd64 Python 3.12 base resolved from Docker Hub on 2026-11-08.
+FROM python@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4
+RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgl1 libglfw3 libgomp1 && rm -rf /var/lib/apt/lists/*
+RUN python -m venv /opt/sx/.venv
+ENV PATH="/opt/sx/.venv/bin:$PATH" PYTHONPATH="/opt/xmimic" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 JAX_PLATFORMS=cpu MUJOCO_GL=egl
+WORKDIR /opt/xmimic
+COPY data/runtime-images/ /opt/runtime-wheels/
+COPY xmimic/ xmimic/
+COPY requirements.txt Dockerfile.cpu Dockerfile.gpu .dockerignore ./
+COPY tools/build_runtime_wheels.py tools/build_runtime_wheels.py
+RUN python tools/build_runtime_wheels.py --verify --output /opt/runtime-wheels
+# Install the exact source-built SDK wheel. Its training extra carries the owning runtime.
+RUN python -m pip install --require-hashes --only-binary=:all: -r /opt/runtime-wheels/cpu.lock
+RUN python -m pip check && python -c 'import sx_training,sx_embodiments,sx_geometry; from xmimic.managed_worker import retarget'
+CMD ["/opt/sx/.venv/bin/python", "-m", "sx_training", "--help"]

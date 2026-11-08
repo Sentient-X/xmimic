@@ -30,8 +30,8 @@ class Kinematics:
             Rp = Rs[par]
             pi = P[par] + mv3(Rp, self.off_p[i])
             R_off = mm3(Rp, self.off_R[i])
-            Ri = mm3(R_off, axis_angle_to_mat(self.axes[i], q[..., j]))
-            wi = W[par] + mv3(R_off, self.axes[i]) * qd[..., j : j + 1]
+            Ri = R_off if j < 0 else mm3(R_off, axis_angle_to_mat(self.axes[i], q[..., j]))
+            wi = W[par] if j < 0 else W[par] + mv3(R_off, self.axes[i]) * qd[..., j : j + 1]
             vi = V[par] + jnp.cross(W[par], pi - P[par])
             P[i], Rs[i], V[i], W[i] = pi, Ri, vi, wi
         idx = range(self.num_bodies) if all_bodies else self.tracked_idx

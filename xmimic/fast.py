@@ -38,7 +38,7 @@ from . import buffer as rb
 from . import fast_nets as fn
 from . import nets, optim
 from .algorithm import XMimic
-from .mdp import BODY_ANGVEL_STD, BODY_LINVEL_STD, BODY_ORI_STD, BODY_POS_STD, CONTACT_Z, ROOT_ORI_STD, ROOT_POS_STD
+from .mdp import BODY_ANGVEL_STD, BODY_LINVEL_STD, BODY_ORI_STD, BODY_POS_STD, ROOT_ORI_STD, ROOT_POS_STD
 from .mdp import W_ACTION_RATE, W_JOINT_LIMIT, flatten_state, invariant_features, unflatten_state
 from .motion import CONTROL_DT
 from .rot import mat_to_6d, mm3, mv3, rot_angle_sq, tr3, yaw_mat
@@ -89,7 +89,7 @@ class FastXMimic(XMimic):
         r = (r_track + W_ACTION_RATE * r_rate + W_JOINT_LIMIT * r_lim) * CONTROL_DT
         if w_contact > 0:
             fz, slip = self._feet(bp, 2), (self._feet(bv, 0) ** 2 + self._feet(bv, 1) ** 2)
-            c_sim = jax.nn.sigmoid((CONTACT_Z - fz) / 0.005)
+            c_sim = jax.nn.sigmoid((mdp.contact_heights - fz) / 0.005)
             c_ref = motion.ref_contact[f]
             r_contact = (1 - (c_sim - c_ref) ** 2) + c_ref * jnp.exp(-slip / 0.3**2)
             r = r + w_contact * r_contact.mean(-1) * CONTROL_DT
@@ -237,10 +237,10 @@ class FastXMimic(XMimic):
 
         def critic_step(vc, idx):
             params, opt = vc
-            l, g = jax.value_and_grad(lambda p: ((self._critic_apply(p, Xf[idx]) - Yf[idx]) ** 2).mean())(params)
+            loss, g = jax.value_and_grad(lambda p: ((self._critic_apply(p, Xf[idx]) - Yf[idx]) ** 2).mean())(params)
             g, _ = optim.clip_by_global_norm(g, 1.0)
             params, opt = optim.step(params, g, opt, self.critic_mask, lr)
-            return (params, opt), l
+            return (params, opt), loss
 
         (critic, opt_v), v_losses = jax.lax.scan(critic_step, (carry["critic"], carry["opt_v"]), perms, unroll=True)
         return critic, critic_b, opt_v, v_losses
