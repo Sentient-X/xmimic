@@ -524,6 +524,21 @@ def solve_sequence(target: PreparedTarget, positions: Mapping[str, np.ndarray], 
                     q, improved = candidate, True
                     break
             if not improved:
+                # Clipping an unconstrained Newton step can destroy descent:
+                # its improvement may depend on a coordinate already at a bound.
+                # The projected negative gradient is a feasible descent direction
+                # unless this box-constrained objective is stationary.
+                step = np.clip(q[free]-jac.T @ error, lo[free], hi[free])-q[free]
+                size = np.linalg.norm(step)
+                if size > config.max_step_rad:
+                    step *= config.max_step_rad/size
+                for exponent in range(20):
+                    candidate = q.copy()
+                    candidate[free] = np.clip(q[free]+2.**(-exponent)*step, lo[free], hi[free])
+                    if np.linalg.norm(residual(candidate)[0]) < np.linalg.norm(error):
+                        q, improved = candidate, True
+                        break
+            if not improved:
                 break
         _, pe, re, de = residual(q)  # Measure returned state, never a stale pre-update error.
         ok = (np.all(pe <= config.position_tolerance_m) and np.all(re <= config.orientation_tolerance_rad)
