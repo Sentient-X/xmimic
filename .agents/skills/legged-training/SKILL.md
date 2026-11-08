@@ -960,7 +960,12 @@ observation features, native action scales/governor and small learner architectu
 remain labelled adaptations. Neither numerical source agreement nor tests prove a
 learning gain. The subsequent zero-aperture follow-up replaces scalar abs by the
 safe scalar norm in reward/ratio and tests exact-zero gradients plus two-sided
-descent through affine/curved owner laws; track that validation separately.
+descent through affine/curved owner laws. Follow-up455390a passed37focused tests.
+TRAIN-only `reward-pilot-v3` completed all four adaptations at10updates×64×32,
+20,480real transitions each, with finite recorded objectives/losses and no evaluation.
+The separately authorized `vector-million-reward-v3` has started from frozen455390a
+with the same500update/three-seed budget and held thresholds; DLS held8/8. It is
+incomplete and carries no aggregate learned score or learning-gain claim.
 
 A new objective requires a new frozen code/request/run. Never change old evaluation
 bytes, widen thresholds, tune weights on development scores while calling them

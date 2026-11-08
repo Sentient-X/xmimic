@@ -166,9 +166,17 @@ oracles, rotation invariance, far-field descent, scalar/vector/projected parity 
 exact interrupted PPO/world-model continuation. A follow-up found that JAX's scalar
 `abs` assigns an unwanted derivative at exactly zero aperture error. The follow-up
 uses the same safe scalar norm for aperture tracking and tolerance ratios, with
-zero-gradient and two-sided descent regressions for affine/curved owner laws. Its
-validation is recorded separately from the original 37-test result; neither test
-count is a new cohort score.
+zero-gradient and two-sided descent regressions for affine/curved owner laws.
+Follow-up `455390a` passed the same 37-test focused batch. Neither test count is a
+new cohort score. A TRAIN-only stability pilot (`reward-pilot-v3`) then completed
+10 updates × 64 environments × 32 steps for each of the four learned adaptations:
+20,480 real transitions per method, with finite reported objectives and losses. It
+contains no development/final evaluation and establishes no accuracy gain.
+
+The separately authorized `vector-million-reward-v3` cohort has started from frozen
+checkout `455390a`: the same 500-update budget, three training seeds and strict
+held-pose thresholds, with final-confirmation seeds still reserved. Its numerical
+control held 8/8. The cohort is not complete; no aggregate learned score is claimed.
 
 Remaining adaptations are explicit: two-arm/aperture task, nominal MuJoCo and prepared
 native action scales/governor, noiseless world-frame observation superset, canonical
