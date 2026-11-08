@@ -138,3 +138,10 @@ python -m tools.qualify_retarget --source-cache /private/original-cache/key \
 The command refuses changes to source mapping or optimizer settings, verifies the original completed cache, and writes a distinct derived cache. The old rejection is immutable. `tools/render_retarget.py` renders source and reference with actual MuJoCo robot meshes, residuals and native joint-limit indicators; the video displays both source time and reference time. It is a kinematic replay, not a physics rollout.
 
 **Engineering hold (2026-11-08):** the user rejected the SO-101-headed development body for further learning promotion and requested restoration of the earlier humanoid head with human engineering review. The measurements above are preserved diagnostics of that superseded candidate, not authorization to train it or a qualification of its construction. No GPU training was performed for that candidate. The generic parser, projection, recovery and visualization mechanisms remain reusable after a reviewed body is selected.
+
+The original nominal exporter used the wrong Euler convention for URDF RPY.
+Its old floor/collision/rendering conclusions are invalid. Corrected owner receipts
+use `sx-embodiments.nominal-mujoco/v2` and explicit extrinsic `XYZ` rotations;
+XMimic refuses old bundles for learning. Regenerate from the pinned body and profile.
+The original-head assembly is a separate engineering-review draft. Training remains
+held; restoring its head does not qualify the full model.

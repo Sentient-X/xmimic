@@ -15,7 +15,7 @@ from xmimic.model import load_model
 
 
 def fixture(tmp_path):
-    scene = '''<mujoco><compiler angle="radian"/><option timestep=".005"/>
+    scene = '''<mujoco><compiler angle="radian" eulerseq="XYZ"/><option timestep=".005"/>
     <worldbody><geom name="floor" type="plane" size="2 2 .1"/>
     <body name="base" pos="0 0 .6"><freejoint name="floating_root"/><geom size=".1"/>
       <body name="upper" pos=".2 -.1 0" euler=".2 -.3 .4">
@@ -29,7 +29,8 @@ def fixture(tmp_path):
     nominal = {'expected_embodiment_id': 'fixture-only', 'joints': [{'name': n, 'default_position': .1, 'action_scale': .3}
                           for n in ('twist', 'bend')],
                'tracked_links': ['base', 'fixed', 'sole'], 'contacts': [{'link': 'sole', 'height_m': .04}]}
-    receipt = {'embodiment_id': 'fixture-only', 'scene_sha256': hashlib.sha256(scene.encode()).hexdigest(),
+    receipt = {'schema': 'sx-embodiments.nominal-mujoco/v2',
+               'rotation_convention': 'urdf-rpy-extrinsic-XYZ', 'embodiment_id': 'fixture-only', 'scene_sha256': hashlib.sha256(scene.encode()).hexdigest(),
                'joint_names': ['twist', 'bend'], 'profile': nominal,
                'profile_sha256': str(content_digest(nominal)),
                'files': [['scene.xml', hashlib.sha256(scene.encode()).hexdigest()]]}
@@ -79,3 +80,23 @@ def test_scene_receipt_tampering_refused(tmp_path):
         f.write(' ')
     with pytest.raises(ValueError, match='receipt'):
         adapt_nominal_bundle(tmp_path, profile)
+
+
+def test_legacy_or_wrong_rotation_export_cannot_enter_training(tmp_path):
+    from xmimic.embodiment_bundle import verify_nominal_receipt
+    fixture(tmp_path)
+    path = tmp_path/'receipt.json'
+    receipt = json.loads(path.read_text())
+    receipt['schema'] = 'sx-embodiments.nominal-mujoco/v1'
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='regenerate'):
+        verify_nominal_receipt(tmp_path)
+    receipt['schema'] = 'sx-embodiments.nominal-mujoco/v2'
+    scene = (tmp_path/'scene.xml').read_text().replace('eulerseq="XYZ"', 'eulerseq="xyz"')
+    (tmp_path/'scene.xml').write_text(scene)
+    digest = hashlib.sha256(scene.encode()).hexdigest()
+    receipt['scene_sha256'] = digest
+    receipt['files'] = [['scene.xml', digest]]
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='extrinsic RPY'):
+        verify_nominal_receipt(tmp_path)
