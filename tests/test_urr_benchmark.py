@@ -26,7 +26,7 @@ def prepared_fixture(tmp_path, monkeypatch):
       <body name="b" pos="1 0 0"><joint name="q2" axis="0 0 1" range="-2 2" damping="1"/>
       <geom type="capsule" fromto="0 0 0 1 0 0" size=".02" mass="1" contype="0" conaffinity="0"/>
       <body name="tip" pos="1 0 0"/></body></body>
-      <body name="held"><joint name="q3" axis="0 0 1" range="-2 2" damping="1"/>
+      <body name="held"><joint name="q3" axis="0 0 1" range="-2 2" damping="1" armature="0.1"/>
       <geom type="sphere" size=".02" mass=".1" contype="0" conaffinity="0"/></body></body></worldbody>
       <actuator><position joint="q1" kp="30" kv="6"/><position joint="q2" kp="30" kv="6"/>
       <position joint="q3" kp="30" kv="6"/></actuator></mujoco>''')
@@ -68,6 +68,7 @@ def test_complete_physics_and_goal_resume_across_episode_lengths(tmp_path, monke
     actual = continued.step(np.array([-.2, .1, .0]))
     np.testing.assert_array_equal(expected[0], actual[0])
     assert expected[1:] == actual[1:]
+    assert actual[3]['physics_warning_count'] == 0
     for k,v in continued.state().items():
         np.testing.assert_array_equal(v, env.state()[k])
     continued.reset(74828)
@@ -115,7 +116,8 @@ def test_evaluation_preserves_all_URR_samples_and_refuses_policy_rebinding(tmp_p
 def test_returned_pose_matches_current_integrated_native_state(tmp_path, monkeypatch):
     env = URRPhysicsEnv(prepared_fixture(tmp_path, monkeypatch), TaskConfig(accumulate=True))
     env.reset(4)
-    env.step(np.array([.5, -.3, .2]))
+    _, _, _, metrics = env.step(np.array([.5, -.3, .2]))
+    assert metrics['physics_warning_count'] == 0
     integrated_goal = env._goal_for(env.data.qpos[env.qadr].copy())
     env.set_goal(integrated_goal)
     np.testing.assert_allclose(env.errors(), 0, atol=1e-14)
@@ -145,3 +147,77 @@ def test_copied_task_cannot_be_reused_for_another_request(tmp_path, monkeypatch)
     (new/'task-1.json').write_bytes((old/'task-1.json').read_bytes())
     with pytest.raises(ValueError, match='another evaluation'):
         evaluate(factory, zero, [1], new, policy_identity='B')
+
+
+@pytest.mark.parametrize('precision,accumulate', [(False, False), (False, True), (True, False), (True, True)])
+def test_structured_observation_matches_physics_and_ignores_hallucinated_channels(tmp_path, monkeypatch, precision, accumulate):
+    env = URRPhysicsEnv(prepared_fixture(tmp_path, monkeypatch), TaskConfig(precision=precision, accumulate=accumulate))
+    previous = env.reset(18)
+    action = np.array([.15, -.21, .12])
+    following, reward, _, metrics = env.step(action)
+    assert metrics['physics_warning_count'] == 0
+    proposal = following.copy()
+    proposal[2*env.action_dim:] = 99.  # forbidden invented goals/errors/command/history
+    projected = env.project_observation(previous, action, proposal)
+    np.testing.assert_allclose(projected, following, atol=3e-4, rtol=1e-5)
+    np.testing.assert_array_equal(projected[env.goal_slice], previous[env.goal_slice])
+    np.testing.assert_allclose(env.reward_from_observation(projected, previous[3*env.action_dim:4*env.action_dim]), reward, atol=2e-5)
+    jacobian = jax.jacrev(lambda prediction: env.project_observation(previous, action, prediction))(jnp.asarray(proposal))
+    assert np.isfinite(jacobian).all()
+    np.testing.assert_array_equal(jacobian[:, 2*env.action_dim:], 0.)
+
+
+def test_structured_identity_goal_gradient_is_finite_and_moving_state_is_refused(tmp_path, monkeypatch):
+    prepared = prepared_fixture(tmp_path, monkeypatch)
+    env = URRPhysicsEnv(prepared, TaskConfig(precision=True, accumulate=True))
+    env.reset(0)
+    env.set_goal(env._goal_for(env.data.qpos[env.qadr]))
+    obs = env.observation()
+    grad = jax.grad(lambda predicted: env.reward_from_observation(
+        env.project_observation(obs, jnp.zeros(env.action_dim), predicted), jnp.zeros(env.action_dim)))(jnp.asarray(obs))
+    assert np.isfinite(grad).all()
+    moving = URRPhysicsEnv(prepared, TaskConfig(moving=True, episode_steps=6, hold_steps=2))
+    initial = moving.reset(0)
+    np.testing.assert_allclose(moving.errors(), 0., atol=1e-14)
+    with pytest.raises(ValueError, match='stationary goals'):
+        moving.project_observation(initial, np.zeros(moving.action_dim), initial)
+    for _ in range(4):
+        moving.step(np.zeros(moving.action_dim))
+    final_goal = moving._goal_for(moving.target_q)
+    for role in moving.roles:
+        np.testing.assert_allclose(moving.goal.poses[role].position, final_goal.poses[role].position, atol=1e-14)
+    assert moving.progress == 0.  # changing targets cannot create improvement rewards
+
+
+@pytest.mark.parametrize('curved', [False, True])
+def test_structured_aperture_uses_declared_owner_relation(tmp_path, monkeypatch, curved):
+    from sx_embodiments import Embodiment
+    from sx_embodiments.compose import RootMount, body_component
+    from sx_embodiments.curves import Curve1D, Knot
+    from sx_embodiments.identity import PartId
+    from sx_embodiments.layout import JointLayout
+    from sx_embodiments.parts import GripperSpec, Limb
+
+    prepared = prepared_fixture(tmp_path, monkeypatch)
+    body = Embodiment.from_json((prepared/'embodiment.json').read_text())
+    arm = body.components[0].part
+    gripper = GripperSpec(PartId('declared_aperture'), JointLayout((arm.layout.axes[2],)),
+        travel_m=(0., .07), gap_curve=Curve1D((Knot(-2., 0.), Knot(.3, .01), Knot(2., .07))) if curved else None)
+    body = replace(body, components=(
+        body_component('arm', replace(arm, layout=JointLayout(arm.layout.axes[:2]), home=arm.home[:2]), RootMount('base'), limb=Limb.ARM),
+        body_component('tool', gripper, RootMount('base'))))
+    (prepared/'embodiment.json').write_text(body.to_json())
+    spec = json.loads((prepared/'benchmark.json').read_text())
+    spec['embodiment_id'] = str(body.id)
+    spec['apertures'] = {'opening': {'component_id': 'tool', 'drive_joint': 'q3'}}
+    (prepared/'benchmark.json').write_text(json.dumps(spec))
+    env = URRPhysicsEnv(prepared)
+    previous = env.reset(13)
+    for value in (-2., -.5, .3, 1.4, 2.):
+        q = env.data.qpos[env.qadr].copy()
+        q[2] = value
+        env._set_positions(env.data, q)
+        proposed = env.observation()
+        projected = env.project_observation(previous, np.zeros(3), proposed)
+        expected = env.goal.apertures['opening']-gripper.aperture_from_drive(value)
+        np.testing.assert_allclose(projected[env.error_slice][-1], expected, atol=1e-8)

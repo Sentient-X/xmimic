@@ -33,6 +33,7 @@ class Environment(Protocol):
     def state(self) -> dict[str, np.ndarray]: ...
     def restore(self, state: dict[str, np.ndarray]) -> None: ...
     def reward_from_observation(self, observation, previous_action): ...
+    def project_observation(self, previous, action, predicted): ...
 
 
 @dataclass(frozen=True)
@@ -136,7 +137,7 @@ def _updated(params, state, loss, config):
     return updated, opt, value, norm
 
 
-def _kernels(config, reward, action_dim):
+def _kernels(config, reward, action_dim, project=None):
     @jax.jit
     def ppo(pi, value, op, ov, norm, obs, latent, old_logp, advantage, returns):
         def loss(params):
@@ -150,15 +151,19 @@ def _kernels(config, reward, action_dim):
 
     @jax.jit
     def fit(wm, opt, buffers, obs, actions, following):
-        scale = nets.rn_std(buffers['out_norm'], 1e-3)
-        return _updated(wm, opt, lambda w: jnp.mean(((predict_next(w, buffers, obs, actions)-following)/scale)**2), config)
+        physical = slice(0, 2*action_dim)
+        scale = nets.rn_std(buffers['out_norm'], 1e-3)[physical]
+        def loss(w):
+            prediction = project(obs, actions, predict_next(w, buffers, obs, actions))
+            return jnp.mean(((prediction[..., physical]-following[..., physical])/scale)**2)
+        return _updated(wm, opt, loss, config)
 
     @jax.jit
     def imagined(pi, opt, wm, buffers, norm, starts):
         def loss(params):
             def step(obs, index):
                 action = jnp.tanh(_mean(params, norm, obs))
-                following = predict_next(wm, buffers, obs, action)
+                following = project(obs, action, predict_next(wm, buffers, obs, action))
                 # The common environment owns task semantics, including action-rate
                 # cost. Complete command and reward-history state remain in obs.
                 r = jax.vmap(reward)(following, obs[:, 3*action_dim:4*action_dim])
@@ -200,6 +205,12 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
     env = env_factory()
     obs = _observation(env.reset(config.seed), env.observation_dim)
     env_state = {k:np.asarray(v).copy() for k,v in env.state().items()}
+    project = None
+    if method == 'world_model':
+        project = env.project_observation
+        # Refuse missing/nonstationary state before collecting paid transitions.
+        projected = project(jnp.asarray(obs), jnp.zeros(env.action_dim), jnp.asarray(obs))
+        _observation(projected, env.observation_dim)
     binding = _binding(env, config, method, precision, env_state)
     carry = _initial(config, env.observation_dim, env.action_dim, env_state)
     carry['obs'] = obs
@@ -209,7 +220,7 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
         _, carry, _, elapsed = checkpoint.restore_checkpoint(Path(resume_from), {}, carry, binding=binding)
         env.restore(carry['env'])
         latest = Path(resume_from)
-    ppo, fit, imagined = _kernels(config, env.reward_from_observation, env.action_dim)
+    ppo, fit, imagined = _kernels(config, env.reward_from_observation, env.action_dim, project)
     policy = jax.jit(lambda pi, norm, obs: _mean(pi, norm, obs))
     began = time.monotonic()
     while int(carry['it']) < config.iterations:
@@ -296,6 +307,7 @@ def train(env_factory: Callable[[], Environment], *, method: Literal['ppo', 'wor
                     value_loss=float(row[2]), world_model_loss=float(row[3]), physics_steps=int(row[4]))
                for index, row in enumerate(carry['metric_history'][:int(carry['it'])])]
     receipt = dict(method=('PolicyIK-derived matched PPO' if method=='ppo' else 'XMimic-derived matched world model'),
+                   dynamics_model='physical-q-qd/canonical-observation-v1' if method=='world_model' else None,
                    precision=precision, iterations=int(carry['it']), physics_steps=int(carry['physics_steps']),
                    completed=int(carry['it'])==config.iterations, checkpoint=str(latest), metrics=metrics,
                    elapsed_seconds=elapsed+time.monotonic()-began,

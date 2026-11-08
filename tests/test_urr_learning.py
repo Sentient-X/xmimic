@@ -56,6 +56,13 @@ class ServoEnvironment:
     def reward_from_observation(self, obs, previous_action):
         return jnp.exp(-4*obs[..., 5]**2)-.001*jnp.sum((obs[..., 3:4]-previous_action)**2, axis=-1)
 
+    def project_observation(self, previous, action, predicted):
+        # Exact facts for this one-hinge physics fixture, in the same contract as
+        # the canonical environment's FK-based observation projection.
+        command = jnp.clip(previous[..., 0]+previous[..., 2]+.05*action[..., 0], -.9, .9)
+        q, qd, goal = predicted[..., 0], predicted[..., 1], previous[..., 4]
+        return jnp.stack((q, qd, command-q, action[..., 0], goal, goal-q), axis=-1)
+
     def state(self):
         return {'qpos': self.data.qpos.copy(), 'qvel': self.data.qvel.copy(), 'ctrl': self.data.ctrl.copy(),
                 'time': np.array(self.data.time), 'qacc_warmstart': self.data.qacc_warmstart.copy(),

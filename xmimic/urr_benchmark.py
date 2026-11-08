@@ -22,6 +22,8 @@ from sx_embodiments.parts import GripperSpec
 from sx_geometry import FramedTransform, Pose, mat_to_quat, orientation_error
 
 from .artifact_cache import _atomic, _json, content_hash
+from .kin import Kinematics as DifferentiableKinematics
+from . import rot
 
 
 @dataclass(frozen=True)
@@ -141,12 +143,28 @@ class URRPhysicsEnv:
                                      [config.position_tolerance_m] * 3 + [config.orientation_tolerance_rad] * 3]
                                     + [config.aperture_tolerance_m] * len(self.apertures))
         self.observation_dim = self.error_slice.stop + (2 * self.error_dim if config.precision else 0) + 3
+        self.physical_state_dim = 2*self.action_dim
+        self.projection_kinematics = DifferentiableKinematics.from_mujoco(
+            self.model, self.names, dependent_joints=self.spec.get('dependent_joints', ()),
+            tracked_bodies=[self.model.body(body_id).name for body_id, _ in self.site_frames])
+        self.aperture_curves = []
+        for _, part, index in self.apertures:
+            if part.gap_curve is not None:
+                xs = [k.x for k in part.gap_curve.knots]
+                ys = [k.y for k in part.gap_curve.knots]
+            elif part.travel_m is not None and part.dof == 1:
+                bounds = part.layout.axes[0].bounds
+                xs, ys = [bounds.lower, bounds.upper], list(part.travel_m)
+            else:
+                raise ValueError('Differentiable aperture needs a declared curve or affine travel law')
+            self.aperture_curves.append((index, np.asarray(xs), np.asarray(ys)))
         self.binding = {"schema": "xmimic.urr-physics-task/v1", "body_id": str(self.body.id),
                         "scene_sha256": digest(scene), "preparation_sha256": digest(self.prepared / "benchmark.json"),
                         "body_document_sha256": digest(self.prepared / "embodiment.json"),
                         "environment_code_sha256": digest(Path(__file__)), "task": asdict(config),
                         "owner_code": {cls.__module__: digest(Path(sys.modules[cls.__module__].__file__))
-                                       for cls in (Embodiment, Kinematics, GripperSpec, MotionBinding)},
+                                       for cls in (Embodiment, Kinematics, GripperSpec, MotionBinding, DifferentiableKinematics)},
+                        "projection": "physical-q-qd/canonical-observation-v1", "rotation_code_sha256": digest(Path(rot.__file__)),
                         "observation": "native_q_normalized,qd_scaled,command_error_scaled,previous_action,URR_goal_3p6R_aperture,raw_error,optional_coarse_fine,progress_dwell",
                         "action": "bounded native-unit joint-reference increments" if config.accumulate else "full-authority nominal-relative references with shared native-unit rate governor",
                         "observation_dim": self.observation_dim, "action_dim": self.action_dim,
@@ -213,7 +231,7 @@ class URRPhysicsEnv:
         self.steps = 0
         self._set_positions(self.data, self.start_q)
         self.data.ctrl[self.controls] = self.command
-        self.set_goal(self._goal_for(self.target_q))
+        self.set_goal(self._goal_for(self.start_q if self.config.moving else self.target_q))
         return self.observation()
 
     def errors(self) -> np.ndarray:
@@ -269,25 +287,72 @@ class URRPhysicsEnv:
             reward = reward - self.action_rate_weight * jnp.mean(jnp.square(action - jnp.asarray(previous_action)), axis=-1)
         return reward
 
+    def _command_reference(self, command, action, error, xp):
+        """One command transition shared by physics and differentiable imagination."""
+        if self.config.precision:
+            ratio = float(self._ratio(error)) if xp is np else self._ratio(error)
+            gain = .1+.9*xp.clip((ratio-1)/19., 0., 1.)
+        else:
+            gain = xp.asarray(1.)
+        if self.config.accumulate:
+            desired = command+self.scale*gain[..., None]*action
+        else:
+            authority = np.maximum(self.hi-self.nominal, self.nominal-self.lo)
+            desired = self.nominal+authority*action
+        desired = xp.clip(desired, command-self.scale, command+self.scale)
+        return xp.clip(desired, self.lo, self.hi)
+
+    def project_observation(self, previous, action, predicted):
+        """Learn q/qd only; derive every other stationary task channel from facts.
+
+        `predicted` retains the full network width for checkpoint shape clarity,
+        but its command, goal, errors and history channels have no authority.
+        Moving goals require explicit trajectory state and are refused here.
+        """
+        if self.config.moving:
+            raise ValueError('Structured world-model training requires stationary goals; moving trajectory state is not represented')
+        previous, predicted = jnp.asarray(previous), jnp.asarray(predicted)
+        action = jnp.clip(jnp.asarray(action), -1., 1.)
+        J = self.action_dim
+        midpoint, half = (self.hi+self.lo)/2, (self.hi-self.lo)/2
+        old_q = previous[..., :J]*half+midpoint
+        command = old_q+previous[..., 2*J:3*J]*self.scale
+        command = self._command_reference(command, action, previous[..., self.error_slice], jnp)
+        q = predicted[..., :J]*half+midpoint
+        qd = predicted[..., J:2*J]*self.scale/self.control_dt
+        shape = q.shape[:-1]
+        zero = jnp.zeros(shape+(3,), dtype=q.dtype)
+        identity = jnp.broadcast_to(jnp.eye(3, dtype=q.dtype), shape+(3, 3))
+        positions, rotations, _, _ = self.projection_kinematics.forward(zero, identity, zero, zero, q, qd)
+        goal = previous[..., self.goal_slice]
+        errors = []
+        for i, (_, offset) in enumerate(self.site_frames):
+            position = positions[..., i, :]+rot.mv3(rotations[..., i, :, :], offset[:3, 3])
+            rotation = rot.mm3(rotations[..., i, :, :], offset[:3, :3])
+            first, second = goal[..., 9*i+3:9*i+6], goal[..., 9*i+6:9*i+9]
+            desired = jnp.stack((first, second, jnp.cross(first, second)), axis=-1)
+            errors.extend((goal[..., 9*i:9*i+3]-position,
+                           rot.so3_log(rot.mm3(desired, rot.tr3(rotation)), safe_zero=True)))
+        for i, (index, xs, ys) in enumerate(self.aperture_curves):
+            aperture = jnp.interp(q[..., index], jnp.asarray(xs), jnp.asarray(ys))
+            errors.append((goal[..., 9*len(self.roles)+i]-aperture)[..., None])
+        error = jnp.concatenate(errors, axis=-1)
+        values = [predicted[..., :2*J], (command-q)/self.scale, action, goal, error]
+        if self.config.precision:
+            values.extend((jnp.clip(error/self.coarse, -1., 1.), jnp.clip(error/self.tolerances, -1., 1.)))
+        ratio = self._ratio(error)
+        best = previous[..., -3]*100.
+        progress = jnp.maximum(0., best-ratio)/100.
+        dwell = jnp.where(ratio <= 1., previous[..., -1]+1./self.config.hold_steps, 0.)
+        values.append(jnp.stack((jnp.minimum(best, ratio)/100., progress, dwell), axis=-1))
+        return jnp.concatenate(values, axis=-1)
+
     def step(self, action):
         action = np.asarray(action, dtype=float)
         if action.shape != (self.action_dim,) or not np.isfinite(action).all():
             raise ValueError("Action must be finite and match native coordinates")
         action = np.clip(action, -1, 1)
-        if self.config.precision:
-            ratio = float(self._ratio(self.errors()))
-            gain = .1 + .9 * np.clip((ratio - 1) / 19., 0., 1.)
-        else:
-            gain = 1.
-        if self.config.accumulate:
-            desired = self.command + self.scale * gain * action
-        else:
-            # Absolute references have the same full native authority as integrated
-            # references; the shared governor bounds per-cycle command changes.
-            authority = np.maximum(self.hi - self.nominal, self.nominal - self.lo)
-            desired = self.nominal + authority * action
-        desired = np.clip(desired, self.command - self.scale, self.command + self.scale)
-        self.command = np.clip(desired, self.lo, self.hi)
+        self.command = self._command_reference(self.command, action, self.errors(), np)
         previous = self.previous_action.copy()
         self.previous_action = action.copy()
         self.data.ctrl[self.controls] = self.command
@@ -297,8 +362,11 @@ class URRPhysicsEnv:
         mujoco.mj_forward(self.model, self.data)
         self.steps += 1
         if self.config.moving:
-            fraction = min(1., self.steps / max(1, self.config.episode_steps - self.config.hold_steps))
-            self.goal = self._goal_for(self.start_q + fraction * (self.target_q - self.start_q))
+            moving_steps = max(1, self.config.episode_steps-self.config.hold_steps)
+            if self.steps <= moving_steps:
+                fraction = self.steps/moving_steps
+                # A different goal has different progress/holding history.
+                self.set_goal(self._goal_for(self.start_q+fraction*(self.target_q-self.start_q)))
         error = self.errors()
         ratio = float(self._ratio(error))
         self.progress = max(0., self.best - ratio) / 100.
