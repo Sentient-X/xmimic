@@ -1072,6 +1072,17 @@ and10members from both replay directories. Manifest
 `eb3187da1c57fd2c5e9052467f864bf82d3781fe241ceca61a1f2ba0e635f199` is EVALUATION/false.
 Independent manifest/object/archive verification passed;9first-screening publication
 files remained byte-identical. `vector-million-reward-v3-preparation.json` records
-all hashes and totals. This is local preparation only, **not Catalog publication or
-readback**; retain that distinction until the owning authenticated publisher returns
-and verifies its new receipt.
+all hashes and totals. This stage established local preparation only; publication
+and readback were separately executed afterwards.
+
+The authenticated publisher then uploaded and fully restored all8objects through
+Catalog, verifying all6archive inventories/1,960logical files. Private pack:
+`xmimic.benchmarks.stationary.vector-million-reward-v3.455390a5`; manifest is the
+same `eb3187da…635f199` above,72,138,011bytes. The final
+`vector-million-reward-v3-catalog/publication-receipt.json` has
+`verified_readback=true`, purpose EVALUATION and `training_eligible=false`.
+Use the same command with `--publish` and existing project authentication; never
+discard its durable `transport/publication.json` to retry accepted work. The slow
+laptop readback completed without a second publication or alternate R2 transport.
+Private storage of the do_not_promote result establishes evidence custody, not
+policy acceptance, native upstream scores or permission to train on evaluation.

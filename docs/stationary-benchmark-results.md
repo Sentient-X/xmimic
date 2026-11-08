@@ -212,7 +212,17 @@ pack above. Publisher inventory v2 accepts explicit replay directories, checks t
 body/scene/task receipt identities, retains the publisher code hash, and treats the
 full historical checkout as canonical even without a supplemental `source/` snapshot.
 It requires a new output directory for a v1→v2 transition; old pack bytes, inventory,
-receipts and readback remain unchanged. No new cohort publication is claimed here.
+receipts and readback remain unchanged.
+
+The complete corrected cohort is now published privately as
+`xmimic.benchmarks.stationary.vector-million-reward-v3.455390a5`, with manifest
+`eb3187da1c57fd2c5e9052467f864bf82d3781fe241ceca61a1f2ba0e635f199`.
+All 8 objects / 72,138,011 bytes were downloaded and verified against the six archive
+inventories: 1,960 logical files, including 12 complete final recovery checkpoints
+and both measured replays. Receipt:
+`data/stationary-benchmark/vector-million-reward-v3-catalog/publication-receipt.json`.
+Purpose remains EVALUATION, training eligibility false; stored failure evidence
+does not promote the combined recipe or admit these evaluation tasks for learning.
 
 Remaining adaptations are explicit: two-arm/aperture task, nominal MuJoCo and prepared
 native action scales/governor, noiseless world-frame observation superset, canonical
