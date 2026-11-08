@@ -114,10 +114,17 @@ def checkpoint_files(cell, training):
     return {f'{checkpoint.name}/{name}': path for name,path in files.items()}
 
 
-def prepare(screening, prepared, owner, output):
+def prepare(screening, prepared, owner, output, *, visual_reviews):
     screening, prepared, owner, output = map(Path, (screening, prepared, owner, output))
     if 'raw' in output.resolve().parts or any(p.is_symlink() for p in (output, *output.parents)):
         raise ValueError('Publication requires a derived regular directory')
+    if (output/'inventory.json').exists():
+        previous_inventory = json.loads((output/'inventory.json').read_bytes())
+        if previous_inventory.get('schema') != 'xmimic.urr-evidence-inventory/v2':
+            raise ValueError('Existing evidence inventory version is immutable; use a new output directory')
+    visual_reviews = tuple(map(Path, visual_reviews))
+    if not visual_reviews or len({path.name for path in visual_reviews}) != len(visual_reviews):
+        raise ValueError('Explicit visual review directories need distinct names')
     output.mkdir(parents=True, exist_ok=True)
     request = json.loads((screening/'request.json').read_bytes())
     result = json.loads((screening/'result.json').read_bytes())
@@ -157,9 +164,11 @@ def prepare(screening, prepared, owner, output):
         if checkout_hashes.get(name) != request[field]:
             raise ValueError('Historical source differs from executed benchmark code')
     evidence = {name:screening/name for name in ('request.json','result.json','screening-report.json','checkout-receipt.json')}
-    evidence.update({f'source/{name}':path for name,path in files_under(screening/'source').items()})
+    if (screening/'source').exists() or (screening/'source').is_symlink():
+        evidence.update({f'source/{name}':path for name,path in files_under(screening/'source').items()})
     checkpoints = {}
     selected = []
+    task_hashes = set()
     for record in result['records']:
         cell_name = f"{record['method']}/seed-{record['training_seed']}"
         cell = screening/cell_name
@@ -185,6 +194,7 @@ def prepare(screening, prepared, owner, output):
             if (task['request_sha256'] != evaluation_hash or task['seed'] != seed
                     or len(task['measurements']) != request['task']['episode_steps']):
                 raise ValueError('Evaluation task identity or sample count differs')
+            task_hashes.add(digest(evaluation[f'task-{seed}.json']))
         evidence.update({f'{cell_name}/evaluation/{name}':path for name,path in evaluation.items()})
         training_path = cell/'training.json'
         if record['method'] != 'dls':
@@ -198,16 +208,27 @@ def prepare(screening, prepared, owner, output):
     owner_files = {f'sx_embodiments/{name}':path for name,path in owner_files.items() if '__pycache__' not in Path(name).parts}
     owner_files.update({name:owner/name for name in ('README.md','LICENSE','THIRD_PARTY_NOTICES.md','pyproject.toml')})
     owner_files['owner-commit.txt'] = owner.parent/'commit.txt'
+    visual_files = {}
+    for directory in visual_reviews:
+        members = files_under(directory)
+        if 'replay.json' not in members:
+            raise ValueError('Visual review requires its recorded replay receipt')
+        replay = json.loads(members['replay.json'].read_bytes())
+        if (replay['body_id'] != spec['embodiment_id'] or replay['scene_sha256'] != spec['scene_sha256']
+                or not replay['tasks'] or any(task['sha256'] not in task_hashes for task in replay['tasks'])):
+            raise ValueError('Visual review belongs to another body, scene or recorded task')
+        visual_files.update({f'{directory.name}/{name}':path for name,path in members.items()})
     groups = {'prepared':files_under(prepared), 'screening':evidence,
               'final-checkpoints':checkpoints, 'historical-checkout':checkout,
-              'owner-source':owner_files, 'visual-review-task-0-v3':files_under(screening/'visual-review-task-0-v3')}
+              'owner-source':owner_files, 'visual-review':visual_files}
     inventories = {}
     named = {}
     for name, files in groups.items():
         archive = output/f'{name}.tar.gz'
         inventories[archive.name] = archive_files(files, archive)
         named[archive.name] = archive
-    inventory = {'schema':'xmimic.urr-evidence-inventory/v1','purpose':'evaluation','training_eligible':False,
+    inventory = {'schema':'xmimic.urr-evidence-inventory/v2','purpose':'evaluation','training_eligible':False,
+        'publisher_sha256':digest(Path(__file__)),
         'screening_revision':receipt['revision'], 'owner_revision':(owner.parent/'commit.txt').read_text().strip(),
         'embodiment_id':json.loads((prepared/'benchmark.json').read_bytes())['embodiment_id'],
         'selected_complete_checkpoints':selected,'archives':inventories,
@@ -227,7 +248,7 @@ def prepare(screening, prepared, owner, output):
 def publish(catalog, project, pack, output, named, inventory):
     manifest_path = output/'artifact-manifest.json'
     provenance = Provenance('https://github.com/Sentient-X/xmimic',inventory['screening_revision'],
-                            'NOASSERTION','tools.publish_urr_benchmark')
+                            'NOASSERTION',f"tools.publish_urr_benchmark@sha256:{Sha256Digest(inventory['publisher_sha256'])}")
     binding = CatalogPublisher(catalog,project,provenance).publish_files(
         {digest(path):path for path in named.values()},manifest_path,output/'transport',pack)
     restored = restore_pack(catalog,pack,digest(manifest_path),output/'readback')
@@ -250,11 +271,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('screening','prepared','owner','output'):
         parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--visual-review',type=Path,action='append',required=True,
+                        help='Recorded replay directory; repeat for multiple views with distinct directory names')
     parser.add_argument('--project',required=True)
     parser.add_argument('--pack',required=True)
     parser.add_argument('--publish',action='store_true')
     args = parser.parse_args()
-    named, inventory = prepare(args.screening,args.prepared,args.owner,args.output)
+    named, inventory = prepare(args.screening,args.prepared,args.owner,args.output,visual_reviews=args.visual_review)
     if not args.publish:
         print(json.dumps({'prepared_manifest':digest(args.output/'artifact-manifest.json'),'files':len(named),'bytes':sum(p.stat().st_size for p in named.values())}))
         return

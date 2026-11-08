@@ -2,8 +2,9 @@
 
 Status: the benchmark runner executes actual nominal MuJoCo physics. The first
 screening is complete. The larger structured-model cohort was interrupted after a
-proven reward defect; its partial results and checkpoints remain intact. A new
-source-derived reward correction is implemented but has no completed cohort result. Native vanilla
+proven reward defect; its partial results and checkpoints remain intact. The new
+source-derived reward cohort is complete and remains unpromoted: precision PPO held
+15/24 tasks, combined held 12/24. Native vanilla
 XMimic and PolicyIK execution is a separate managed-runtime track and has no
 completed scores yet. None of these results qualifies physical robot operation.
 
@@ -173,10 +174,45 @@ new cohort score. A TRAIN-only stability pilot (`reward-pilot-v3`) then complete
 20,480 real transitions per method, with finite reported objectives and losses. It
 contains no development/final evaluation and establishes no accuracy gain.
 
-The separately authorized `vector-million-reward-v3` cohort has started from frozen
-checkout `455390a`: the same 500-update budget, three training seeds and strict
-held-pose thresholds, with final-confirmation seeds still reserved. Its numerical
-control held 8/8. The cohort is not complete; no aggregate learned score is claimed.
+The separately authorized `vector-million-reward-v3` cohort completed from frozen
+checkout `455390a` in 1,728.653 seconds, including training, checkpointing and
+development evaluation. Each learned seed used the same 500-update budget
+(1,024,000 real transitions), three seeds per method, eight common development
+tasks per seed, and unchanged simultaneous final-second held-pose thresholds.
+Final-confirmation seeds remain reserved.
+
+| Method | Strict held tasks | Constraint-failure tasks |
+| --- | --- | --- |
+| Numerical IK | 8/8 | 0/8 |
+| Coarse PPO adaptation | 0/24 | 24/24 |
+| Precision PPO adaptation | 15/24 | 0/24 |
+| Coarse world-model adaptation | 0/24 | 0/24 |
+| Combined adaptation | 12/24 | 0/24 |
+
+The report decision is `do_not_promote`. Paired descriptive combined-minus-precision-PPO
+held failure is +0.125 (12.5 percentage points worse). Mean per-task terminal-window
+95th-percentile position error differs by +0.400 mm on the left and -0.323 mm on the
+right. Those mixed directions and the held-task deficit do not establish
+non-regression. The intervals are descriptive paired training-seed/task-family
+bootstraps, not final confirmation. This controlled adaptation result is not a native
+upstream score, convergence proof, or physical qualification.
+
+Complete result/report: `data/stationary-benchmark/vector-million-reward-v3/`.
+Two retained visualizations show **only task 0, training seed 0**, using actual
+recorded native coordinates and requested URR frames:
+
+- `data/stationary-benchmark/vector-million-reward-v3-precision-replay/`: DLS and
+  precision PPO, with `replay.mp4`, contact sheet, error curves and source receipt.
+- `data/stationary-benchmark/vector-million-reward-v3-comparison-replay/`: precision
+  PPO and combined, with the same outputs. This selected view does not replace the
+  complete 104-task cohort records.
+
+New cohort publication preparation is separate from the verified first-screening
+pack above. Publisher inventory v2 accepts explicit replay directories, checks their
+body/scene/task receipt identities, retains the publisher code hash, and treats the
+full historical checkout as canonical even without a supplemental `source/` snapshot.
+It requires a new output directory for a v1→v2 transition; old pack bytes, inventory,
+receipts and readback remain unchanged. No new cohort publication is claimed here.
 
 Remaining adaptations are explicit: two-arm/aperture task, nominal MuJoCo and prepared
 native action scales/governor, noiseless world-frame observation superset, canonical

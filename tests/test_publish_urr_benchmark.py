@@ -85,7 +85,7 @@ def test_archive_seal_preserves_competing_bytes_and_recovers_verified_staging(tm
 
 def screening_fixture(root):
     screen, prepared, owner, output = (root/name for name in ('screen','prepared','owner','output'))
-    for path in (screen/'checkout', screen/'source', screen/'visual-review-task-0-v3', prepared/'robot', owner/'sx_embodiments'):
+    for path in (screen/'checkout', screen/'source', root/'review', prepared/'robot', owner/'sx_embodiments'):
         path.mkdir(parents=True)
     def write(path, value):
         path.write_text(json.dumps(value))
@@ -119,6 +119,9 @@ def screening_fixture(root):
     write(evaluation/'request.json', evaluation_request)
     write(evaluation/'summary.json', summary)
     write(evaluation/'task-7.json', dict(seed=7, request_sha256=content_hash(evaluation_request),measurements=[{}]))
+    write(root/'review/replay.json',dict(body_id='synthetic_fixture',scene_sha256=digest(prepared/'robot/scene.xml'),
+        tasks=[dict(label='DLS',sha256=digest(evaluation/'task-7.json'))]))
+    (root/'review/replay.mp4').write_bytes(b'recorded fixture video bytes')
     write(screen/'result.json',dict(complete=True,request_sha256=content_hash(request),
         records=[dict(method='dls',training_seed=0,evaluation=summary)]))
     write(screen/'screening-report.json', dict(run_result_sha256=digest(screen/'result.json')))
@@ -152,14 +155,73 @@ def test_preparation_refuses_broken_run_closure_before_archiving(tmp_path, mutat
         task['request_sha256' if mutation == 'task_request' else 'measurements'] = '0'*64 if mutation == 'task_request' else []
         path.write_text(json.dumps(task))
     with pytest.raises(ValueError):
-        prepare(screen,prepared,owner,output)
+        prepare(screen,prepared,owner,output,visual_reviews=[tmp_path/'review'])
     assert not list(output.glob('*.tar.gz'))
 
 
 def test_complete_preparation_reopens_without_changing_evidence(tmp_path):
     args = screening_fixture(tmp_path)
-    named, inventory = prepare(*args)
+    named, inventory = prepare(*args,visual_reviews=[tmp_path/'review'])
     before = {name:digest(path) for name,path in named.items()}
-    reopened, repeated = prepare(*args)
+    reopened, repeated = prepare(*args,visual_reviews=[tmp_path/'review'])
     assert inventory == repeated
     assert before == {name:digest(path) for name,path in reopened.items()}
+
+
+@pytest.mark.parametrize('source_present', [False, True])
+def test_explicit_visuals_and_optional_source_preserve_canonical_checkout(tmp_path, source_present):
+    args = screening_fixture(tmp_path)
+    screen, _, _, output = args
+    source = screen/'source'
+    if source_present:
+        (source/'snapshot.py').write_bytes(b'optional supplementary source')
+    else:
+        source.rmdir()  # empty derived fixture only
+    second = tmp_path/'comparison'
+    second.mkdir()
+    (second/'replay.json').write_bytes((tmp_path/'review/replay.json').read_bytes())
+    (second/'replay.mp4').write_bytes(b'another recorded view')
+    named, inventory = prepare(*args,visual_reviews=[tmp_path/'review',second])
+    assert inventory['schema'] == 'xmimic.urr-evidence-inventory/v2'
+    import tools.publish_urr_benchmark as publisher
+    assert inventory['publisher_sha256'] == digest(Path(publisher.__file__))
+    assert 'visual-review.tar.gz' in named and 'visual-review-task-0-v3.tar.gz' not in named
+    assert set(inventory['archives']['visual-review.tar.gz']) == {
+        'review/replay.json','review/replay.mp4','comparison/replay.json','comparison/replay.mp4'}
+    assert ('source/snapshot.py' in inventory['archives']['screening.tar.gz']) == source_present
+    assert 'tools/benchmark_urr.py' in inventory['archives']['historical-checkout.tar.gz']
+    manifest = json.loads((output/'artifact-manifest.json').read_bytes())
+    assert manifest['purpose'] == 'evaluation' and manifest['training_eligible'] is False
+
+
+def test_old_inventory_is_refused_before_any_archive_changes(tmp_path):
+    args = screening_fixture(tmp_path)
+    output = args[-1]
+    output.mkdir()
+    old = b'{"schema":"xmimic.urr-evidence-inventory/v1"}'
+    (output/'inventory.json').write_bytes(old)
+    (output/'visual-review-task-0-v3.tar.gz').write_bytes(b'immutable old archive')
+    before = {p.name:p.read_bytes() for p in output.iterdir()}
+    with pytest.raises(ValueError,match='version is immutable'):
+        prepare(*args,visual_reviews=[tmp_path/'review'])
+    assert before == {p.name:p.read_bytes() for p in output.iterdir()}
+
+
+@pytest.mark.parametrize('invalid', ['duplicate','wrong_task','wrong_scene'])
+def test_explicit_replay_cannot_claim_unrelated_evidence(tmp_path, invalid):
+    args = screening_fixture(tmp_path)
+    review = tmp_path/'review'
+    reviews = [review]
+    if invalid == 'duplicate':
+        reviews *= 2
+    else:
+        path = review/'replay.json'
+        receipt = json.loads(path.read_bytes())
+        if invalid == 'wrong_task':
+            receipt['tasks'][0]['sha256'] = '0'*64
+        else:
+            receipt['scene_sha256'] = '0'*64
+        path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError):
+        prepare(*args,visual_reviews=reviews)
+    assert not list(args[-1].glob('*.tar.gz'))

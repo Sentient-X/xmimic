@@ -963,9 +963,17 @@ safe scalar norm in reward/ratio and tests exact-zero gradients plus two-sided
 descent through affine/curved owner laws. Follow-up455390a passed37focused tests.
 TRAIN-only `reward-pilot-v3` completed all four adaptations at10updates×64×32,
 20,480real transitions each, with finite recorded objectives/losses and no evaluation.
-The separately authorized `vector-million-reward-v3` has started from frozen455390a
-with the same500update/three-seed budget and held thresholds; DLS held8/8. It is
-incomplete and carries no aggregate learned score or learning-gain claim.
+The separately authorized `vector-million-reward-v3` completed from frozen455390a
+in1728.653s, same500update/three-seed budget and held thresholds. DLS8/8 constraint0;
+coarsePPO0/24 constraint24; precisionPPO15/24 constraint0; coarseWM0/24 constraint0;
+combined12/24 constraint0. Report `do_not_promote`: combined-minus-precisionPPO held
+failure+.125, mean per-task terminal-p95 position left+.400mm/right−.323mm. These
+mixed descriptive paired results do not establish non-regression, native baseline
+performance, convergence or physical qualification. All104development tasks and
+12final complete learned checkpoints remain recorded; final seeds stay reserved.
+Replays `vector-million-reward-v3-precision-replay` (DLS/precisionPPO) and
+`vector-million-reward-v3-comparison-replay` (precisionPPO/combined) each show only
+training-seed0/task0. Never generalize that single video into the cohort result.
 
 A new objective requires a new frozen code/request/run. Never change old evaluation
 bytes, widen thresholds, tune weights on development scores while calling them
@@ -1031,3 +1039,28 @@ python -m pytest -q tests/test_publish_urr_benchmark.py
 A corrupt or unknown staging file remains a refusal, not permission to overwrite
 retained evidence. Archive verification and successful local correction do not
 mint training admission or substitute for Catalog readback of a newly published pack.
+
+
+Publisher inventory v2 removes historical-folder assumptions. The full checked
+`checkout/` is canonical; `source/` is optional supplementary evidence. Supply
+recorded replay directories explicitly (repeat --visual-review for multiple views):
+
+```bash
+python tools/publish_urr_benchmark.py --screening COMPLETED_RUN --prepared PREPARED \
+  --owner EXACT_OWNER_ARCHIVE --visual-review PRECISION_REPLAY \
+  --visual-review COMPARISON_REPLAY --output NEW_PUBLICATION_DIRECTORY \
+  --project PROJECT --pack NEW_PRIVATE_EVIDENCE_PACK
+```
+
+Without --publish this only prepares local archives; it grants no network write or
+training admission. The visual archive has canonical group `visual-review`, retains
+each source directory's name and bytes, and rejects duplicate names or replay
+body/scene/task receipts outside the completed run. Inventory records publisher
+SHA-256; Catalog generator provenance carries that same identity. The initial v1
+pack stays readable through its existing manifest/readback; do not rewrite it to
+v2 or use its directory for new preparation.19focused publisher tests passed with
+an exact archived owning `sx-training`/`sx-contracts` atf0607b1. The removed worktree's
+PYTHONPATH failed because the installed SDK predates artifacts; use the retained
+`data/native-baselines/runtime-owner-f0607b1/packages/` roots and source-receipt.json
+instead of changing the shared environment. No new cohort archive or publication
+was created during this implementation/test pass.
