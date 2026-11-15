@@ -28,12 +28,24 @@ from xmimic.retarget_judge import motion_metrics
 def build(args) -> tuple[WholeBodyRetargeter, dict, np.ndarray]:
     corr = json.loads(Path(args.correspondence).read_text())
     model = mujoco.MjModel.from_xml_path(str(args.scene))
+    limits = {}
+    if getattr(args, "retarget_limits", None):
+        # Declared retarget-side limits: the part of a body range a reference motion may use (e.g. an
+        # elbow's swing past straight that the robot never uses). They may only narrow the body's range.
+        limits = json.loads(Path(args.retarget_limits).read_text())["ranges"]
+        for name, (lo, hi) in limits.items():
+            j = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            body_lo, body_hi = model.jnt_range[j]
+            if lo < body_lo - 1e-6 or hi > body_hi + 1e-6:
+                raise SystemExit(f"retarget limit for {name} widens the body range")
+            model.jnt_range[j] = (lo, hi)
     doc = json.loads(Path(args.body_document).read_text())
     r = WholeBodyRetargeter.from_document(model, doc, corr["sites"])
     world = np.asarray(corr["world_from_source"], float)
     cal = parse_soma_bvh(Path(args.calibration_source).read_bytes(), world_from_source=world)
     report = r.calibrate(cal, args.calibration_frame)
     report["source_sha256"] = cal.source_sha256
+    report["retarget_limits"] = limits
     return r, report, world
 
 
@@ -70,7 +82,8 @@ def retarget_one(r: WholeBodyRetargeter, world: np.ndarray, path: Path, out: Pat
         "fps": clip.fps, "solve_seconds": round(seconds, 2), "mean_nfev": float(sol.nfev.mean()),
         "motion_sha256": hashlib.sha256((out / "motion.npz").read_bytes()).hexdigest(),
         "solve_site_position_error_max_m": dict(zip(sol.site_names, sol.position_error_m.max(0).round(4).tolist())),
-        "solver": {"max_joint_speed_rad_s": r.max_joint_speed, "cutoff_hz": cutoff_hz},
+        "solver": {"max_joint_speed_rad_s": r.max_joint_speed, "cutoff_hz": cutoff_hz,
+                   "retarget_limits": getattr(r, "retarget_limits", {})},
         "ground_shift_range_m": [float(r.ground_shift.min()), float(r.ground_shift.max())],
     })
     (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
@@ -89,6 +102,7 @@ def main() -> None:
     p.add_argument("--output", required=True)
     p.add_argument("--window", default=None, help="START:END source frames (recorded, never silent)")
     p.add_argument("--cutoff-hz", type=float, default=12.0)
+    p.add_argument("--retarget-limits", default=None, help="JSON {ranges: {joint: [lo, hi]}}, narrowing only")
     p.add_argument("clips", nargs="+")
     args = p.parse_args()
     r, report, world = build(args)
@@ -97,6 +111,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "calibration.json").write_text(json.dumps(report, indent=1))
     window = tuple(int(x) for x in args.window.split(":")) if args.window else None
+    r.retarget_limits = report["retarget_limits"]
     for clip in args.clips:
         path = Path(clip)
         metrics = retarget_one(r, world, path, out / path.stem, args.embodiment_id, joint_names, window,

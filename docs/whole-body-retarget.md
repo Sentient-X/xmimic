@@ -66,6 +66,8 @@ COMMON="--body-document $N/toe-sites-v1/embodiment.json --scene $N/input/robot/s
 $PY -m tools.retarget_clips $COMMON --embodiment-id <id> --joint-names $N/input/robot/meta.json \
   --output RUN_DIR CLIP.bvh ...
 $PY -m tools.judge_retarget $COMMON RUN_DIR/<clip> ...
+# body facts stay in the embodiment layer; a retarget may only narrow them, declared in a file:
+#   --retarget-limits LIMITS.json   {"ranges": {"left_elbow_pitch_joint": [-1.49, 0.0], ...}}
 $PY -m tools.package_retargets --judgments JUDGMENTS.json --output OUT --volume xmimic-motions
 ```
 
@@ -88,7 +90,7 @@ the dominant errors are arm segments at body joint-range limits (see below).
 | 80 rad/s one-frame arm pops | IK branch switch in one frame | 25 rad/s per-frame speed bound |
 | Limb re-seed experiment | Rarely triggered (errors < 6 cm), and the one switch it made produced an 81 rad/s pop | Removed |
 | Synthetic test joints frozen | MJCF without `angle="radian"` reads ranges in degrees | Test body declares radians; real scenes already do |
-| Elbows stuck at limit 50 % of the calm nominal clip | Body model: elbow q=0 is 90 deg flexed, range allows 0-90 deg flexion and ~80 deg hyperextension | Body range bug reported to the embodiment owner; not compensated here |
+| Elbows stuck at limit 50 % of the calm nominal clip | Real hardware: q=0 is the elbow's forward stop at 90 deg flexion (embodiment owner, FK + teleop history); the range continues ~80 deg past straight | Flexion beyond 90 deg clamps at the stop. The swing past straight is never used: `--retarget-limits` (narrowing only, refused if it widens) holds left [-1.49, 0], right [0, 1.47]; 10 of 18 clips had used it, up to 0.5 rad |
 | Claimed right_hip_roll range was unmirrored (wrong) | Read `jnt_axis` in the joint's local frame; in world the right axis is -X, so +roll abducts and [-0.28, 1.92] is correct | Always judge a range by FK of a distal point, never by local axis + numbers. A declared mirrored override made the cartwheel worse (right leg pinned at the new limit, 45 deg) and was withdrawn; the arm-yaw "offset" claim had no FK and was retracted |
 | Mirrored cartwheel legs do not split | Genuine 16 deg adduction limit on the leading leg plus the elbow cap | Rejected; the jumping jack, first rejected from the 3/4 view, matches in the front view and was accepted |
 
