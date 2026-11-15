@@ -5,3 +5,6 @@ data/
 runs/
 assets/g1/assets/
 .DS_Store
+
+# demo videos, rollouts, ledgers (BONES-SEED / LAFAN derived: never committed)
+results/demo-*/

@@ -196,6 +196,68 @@ before reporting managed integration. No physical motion or run expected to exce
 the repository's approval threshold starts without the user's authorization.
 
 
+## Train directly on Modal (2026-11-16)
+
+The managed sx Job path below never completed a GPU run (it stopped at platform
+boundaries: runtime-image publication, Source recipes without CUDA). For the
+overnight demo the owner asked for XMimic on Modal directly: `tools/modal_app.py`
+(one app `xmimic-train`, Volume `xmimic-runs`, H100 or L40S function). The gap is
+logged in glued `docs/HARNESS-GAPS.md`; move back to the managed path when it runs.
+
+```bash
+uv venv -p 3.11 ~/.cache/xmimic-venv   # local: modal, jax 0.7.2 CPU, mujoco 3.17, imageio-ffmpeg, trimesh, pillow
+M=~/.cache/xmimic-venv/bin/modal
+$M run tools/modal_app.py::fetch_lafan            # 40 clips + 35 G1 meshes into the volume, CPU only
+$M run tools/modal_app.py::train --name g1-smoke-h100 --gpu H100 --args "--iterations 1500 --max_minutes 3"
+python tools/datasheet_profile.py <prepared robot> <data>/robot-ds1 --check     # datasheet actuators + mirror
+$M volume put xmimic-runs <data>/robot-ds1 robots/sentient-ds1
+$M volume put xmimic-runs <clips dir of retargeted .npz> motions/<name>
+$M run tools/modal_app.py::train --name sentient-egypt-v1 --gpu H100 --robot sentient-ds1 \
+    --motions egypt1 --args "--iterations 3500 --max_minutes 15"
+$M volume get xmimic-runs runs/<name>/ckpt_003500.npz <results>/runs/<name>/
+JAX_PLATFORMS=cpu python tools/render_demo.py <ckpt> --robot_dir <data>/robot-ds1 \
+    --motion_dir <clips> --out <results>/<gallery> --run <name>      # metrics + MP4s + index.html
+```
+
+Each `train` call books its wall time at list price in the ledger
+(`results/demo-*/costs.json`, ignored by git) and refuses to launch when the
+ledger plus one worst-case call would pass `--budget`. The same `--name` with the
+same arguments resumes from the newest complete state snapshot
+(`runs/<name>/state/state_*`, every `--snapshot_every` iterations and at the
+stop). Different arguments under an existing name are refused.
+
+Measured (H100 80GB HBM3, driver 13.3, warp 1.19 reported CUDA toolkit 13.4 and
+needed no special build):
+
+| Run | Setup | First compile | Training | it/s | Wall / cost |
+| --- | --- | --- | --- | --- | --- |
+| G1, 40 LAFAN clips, 1050 it | 85 s | 381 s (`jit_chunk` alone 3m24) | 3.4 min | 16.2 | 710 s / $0.87 |
+| Sentient ds1, 1 clip (997 frames), 3500 it | 95 s | ~6 min (new body = new programs) | 6.2 min | 15-16 (probe sweeps dip to 10) | 878 s / $1.07 |
+
+The 3500-iteration Sentient policy reached ep_ret 0.856, 0 terminations, 0 probe
+failures. On the CPU evaluation it tracked the whole egypt clip without falling,
+with a 3.8 cm mean body error (1.8 cm root-relative). A full state snapshot of the 4096-world
+Sentient run is 5.1 GB (903 leaves) on the volume. Only the newest is kept. Each compile is paid on
+every new body or motion-set shape, so batch the clips into one run. Don't run one
+clip per run.
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| PD-only stand topples about the ankles after 1.2-2.2 s | Ankle gravity stiffness m·g·h ≈ 240 Nm/rad exceeds any armature-rule kp (G1 baseline ankle kp is 28.5). | Expected. Report it, don't tune it away. The policy balances. Check static torque capacity instead (`--check`: deep squat peaks at 23% of rating). |
+| Torso folds forward under PD | Armature 0.0072 (G1 class) gives waist kp 28, below the upper body's ~45 Nm/rad. | Use the reflected inertia of the 40:1 DM4340 linkage (armature 0.04, kp 158). |
+| Hand-set bent-knee default looks wrong | Left and right knees have opposite axes. | Keep default zero. The policy is a residual on the reference, so the default only centres observations. |
+| Geometric mirror finds no partners | The body's joints are centred at y ≈ -0.06, and linkage pivots sit up to 8 cm off-symmetric. | Pair by left/right name swap, sign from world axes (pseudovector (-x, y, -z)). |
+| Render 1.0-1.2 s per view frame on the Mac | 2M-face CAD meshes plus shadows. Quadric decimation (fast_simplification) stalls on the CAD soup. | Vertex-cluster the render-only meshes to 3 mm cells (233k faces, 0.11 s/view). |
+| Log lines missing from a background `grep -v` | grep block-buffers. | Use `--line-buffered`, or read the output file at the end. |
+| `modal app logs <name>` fails | It wants the app id. | Use the id from `modal app list`. |
+
+Stop conditions: stop launching when the ledger reaches the budget, and check
+`modal app list` for anything left running. Never commit motion bytes, checkpoints
+or videos: `results/demo-*/` and `data/` are ignored. The egypt clip's reference
+clock is slowed by four (docs/sentient-nominal.md), so its video is not real-time
+human speed. The actuator profile is an interim datasheet profile. Once
+sx-embodiments exports the ratings, re-export through that layer.
+
 ## Managed retarget/cache/training candidate (2026-11-08)
 
 The implementation is in `xmimic.managed_worker`, `retarget_workflow`,

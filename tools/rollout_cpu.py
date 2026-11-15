@@ -31,7 +31,8 @@ from xmimic.sim import DECIMATION, XiLayout  # noqa: E402
 
 
 def rollout(ckpt, clip, start_s, seconds, motion_dir=None, robot_dir=None):
-    """{qpos (T+1, nq), f (T+1,) reference frames, alive (T+1,)} of one episode from frame start_s * 50 of ``clip``."""
+    """{qpos (T+1, nq), ref_qpos (T+1, nq) kinematic reference, f (T+1,) reference frames, alive (T+1,)} of one episode
+    from frame start_s * 50 of ``clip``; ``seconds=None`` plays to the clip's end."""
     jax.config.update("jax_platforms", "cpu")
     params, bufs, meta_ck = load_ckpt(ckpt)
     a = meta_ck["args"]
@@ -78,9 +79,17 @@ def rollout(ckpt, clip, start_s, seconds, motion_dir=None, robot_dir=None):
     a_prev = jnp.zeros(J)
     o, _ = observe(d.qpos, d.qvel, a_prev, jnp.int32(f))
     hist = jnp.broadcast_to(o, (a["hist"], o.shape[-1]))
-    out = {"qpos": [d.qpos.copy()], "f": [f], "alive": [True]}
+    ref_all = [np.asarray(x, np.float64) for x in motion.ref_state(jnp.arange(motion.num_frames))]
+
+    def ref_qpos(f):  # the kinematic reference pose of frame f, as a qpos
+        qp = d.qpos.copy()
+        qp[fq : fq + 3], qp[fq + 3 : fq + 7], qp[qadr] = ref_all[0][f], np.asarray(mat_to_quat(jnp.asarray(ref_all[1][f]))), ref_all[4][f]
+        return qp
+
+    out = {"qpos": [d.qpos.copy()], "f": [f], "alive": [True], "ref_qpos": [ref_qpos(f)]}
     alive = True
-    for t in range(int(round(seconds * 50))):
+    steps = ce - f if seconds is None else int(round(seconds * 50))
+    for t in range(steps):
         if t > 0:
             hist = jnp.concatenate((hist[1:], o[None]), 0)
         a_t = policy(hist, jnp.int32(f))
@@ -94,6 +103,7 @@ def rollout(ckpt, clip, start_s, seconds, motion_dir=None, robot_dir=None):
         out["qpos"].append(d.qpos.copy())
         out["f"].append(f)
         out["alive"].append(alive)
+        out["ref_qpos"].append(ref_qpos(f))
     identity = {"embodiment_id": np.asarray(meta["embodiment_id"])} if "embodiment_id" in meta else {}
     return {**{k: np.asarray(v) for k, v in out.items()}, **identity,
             "robot_dir": np.asarray(str(Path(robot_dir or a.get("robot_dir", ASSETS)).resolve()))}

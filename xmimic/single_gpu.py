@@ -26,7 +26,7 @@ def run(cfg: Config, *, recovery: RecoveryOptions | None = None):
     if recovery is not None:
         if cfg.layout != "1GPU" or cfg.log_every <= 0 or cfg.ckpt_every <= 0:
             raise ValueError("managed recovery requires 1GPU and positive chunk/checkpoint sizes")
-        if cfg.iterations % cfg.log_every or cfg.ckpt_every % cfg.log_every:
+        if cfg.iterations % cfg.log_every or cfg.ckpt_every % cfg.log_every or recovery.snapshot_every % cfg.log_every:
             raise ValueError("managed iteration/checkpoint boundaries must align with log_every")
     os.makedirs(cfg.log_dir, exist_ok=True)
     meta = {**dataclasses.asdict(cfg), "gpus": cfg.gpus}
@@ -108,7 +108,7 @@ def run(cfg: Config, *, recovery: RecoveryOptions | None = None):
             if recovery.resume_from is None:
                 snapshot(0)  # retain warmup/replay/randomized model before the first update
             it = run_synchronized(dispatch, log, cfg.iterations, start_iteration=start_it,
-                                  max_minutes=cfg.max_minutes, checkpoint_every=cfg.ckpt_every,
+                                  max_minutes=cfg.max_minutes, checkpoint_every=recovery.snapshot_every or cfg.ckpt_every,
                                   checkpoint=snapshot, stop_requested=should_stop)
         finally:
             for sig, handler in previous.items():

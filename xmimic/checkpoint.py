@@ -35,6 +35,8 @@ class RecoveryOptions:
     on_metrics: Callable[[dict[str, float | int], int], None] | None = None
     stop_requested: Callable[[], bool] | None = None
     handle_signals: bool = True
+    # Complete-state snapshot interval in iterations (0: every checkpoint); policy checkpoints are unaffected.
+    snapshot_every: int = 0
 
 
 def _json(value):
