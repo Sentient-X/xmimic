@@ -348,6 +348,7 @@ def main():
     p.add_argument("--calibration-source", required=True)
     p.add_argument("--calibration-frame", type=int, default=0)
     p.add_argument("--correspondence", required=True)
+    p.add_argument("--retarget-limits", default=None)
     p.add_argument("clip_dirs", nargs="+")
     args = p.parse_args()
     r, _, _ = build(args)

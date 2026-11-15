@@ -29,7 +29,8 @@ Colour mismatch between a robot link and its skeleton segment = handedness or be
 A joint pinned in the at-limit map for seconds is either a wrong calibration (all clips,
 e.g. hip yaw at +-90 deg) or a body range (one joint, physically meaningful poses).
 Check a suspect range with FK of a distal point before blaming the solver or the body: on
-ca3fb7 the elbows flex only 90 deg (FK-measured, reported). A hip-roll "unmirrored" claim made
+ca3fb7 the elbows flex only 90 deg: a real hardware stop, so declare `--retarget-limits` to keep
+references out of the past-straight swing (check every packaged clip: elbow never past straight). A hip-roll "unmirrored" claim made
 from the local joint axis was wrong (the right axis is -X in world) and cost a re-run.
 Stop: changed body identity (re-run all), a screen threshold you want to widen (don't),
 any silent crop. Never commit BVH, motions or renders.
