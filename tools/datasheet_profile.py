@@ -26,15 +26,16 @@ W = 2 * math.pi * 10.0
 ZETA = 2.0
 # joint-name pattern -> (motor, peak torque Nm, estimated armature kg m^2, source)
 RATINGS = [
-    (r"_hip_(pitch|roll)_joint$", "DM10010", 120.0, 0.050, "datasheet"),
-    (r"_knee_joint$", "DM10010", 120.0, 0.050, "datasheet"),
-    (r"_hip_yaw_joint$", "DM8009", 40.0, 0.020, "datasheet"),
-    (r"^torso_joint$", "DM8009", 40.0, 0.020, "datasheet"),
-    # 2 x DM4340 (40:1) parallel linkages: the inscribed per-axis box of two 27 Nm motors at unit lever ratio
-    (r"_foot[12]_joint$", "2xDM4340 linkage", 27.0, 0.040, "datasheet, per-axis inscribed box"),
-    (r"^waist_(roll|pitch)_joint$", "2xDM4340 linkage", 27.0, 0.040, "datasheet, per-axis inscribed box"),
-    (r"_(shoulder_pitch|shoulder_roll|upper_arm_yaw|elbow_pitch)_joint$", "arm (unrated)", 27.0, 0.010, "nominal: no rating supplied"),
-    (r"_(forearm_yaw|wrist_pitch|wrist_roll)_joint$", "wrist (unrated)", 7.0, 0.004, "nominal: no rating supplied"),
+    (r"_hip_(pitch|roll)_joint$", "DM10010", 150.0, 0.050, "embodiment ratings; armature estimated (not published)"),
+    (r"_knee_joint$", "DM10010", 150.0, 0.050, "embodiment ratings; armature estimated (not published)"),
+    (r"_hip_yaw_joint$", "DM8009", 40.0, 0.020, "embodiment ratings"),
+    (r"^torso_joint$", "DM8009", 40.0, 0.020, "embodiment ratings"),
+    # two DM4340 through a linkage at unit lever ratio: an upper bound, not measured
+    (r"_foot[12]_joint$", "2xDM4340 linkage", 54.0, 0.064, "embodiment ratings (linkage upper bound)"),
+    (r"^waist_(roll|pitch)_joint$", "2xDM4340 linkage", 54.0, 0.064, "embodiment ratings (linkage upper bound)"),
+    (r"_shoulder_(pitch|roll)_joint$", "DM8009P", 40.0, 0.020, "embodiment ratings; joint mapping assumed"),
+    (r"_(upper_arm_yaw|elbow_pitch)_joint$", "DM4340", 27.0, 0.032, "embodiment ratings; joint mapping assumed"),
+    (r"_(forearm_yaw|wrist_pitch|wrist_roll)_joint$", "DM4310", 7.0, 0.004, "embodiment ratings; armature estimated"),
     (r"_finger_joint$", "YUBI gripper (unrated)", 5.0, 0.004, "nominal: no rating supplied"),
 ]
 # The default pose stays the bundle's (zero): the policy acts as a residual on the reference (target = q_ref + scale * a),
@@ -111,7 +112,7 @@ def derive(robot: Path, out: Path) -> dict:
     mirror = geometric_mirror(robot / "scene.xml", meta["joint_names"])
     if mirror is not None and meta.get("mirror_permutation") is None:
         meta["mirror_permutation"], meta["mirror_signs"] = mirror
-    meta["actuator_profile"] = {"name": "damiao-datasheet-v1", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
+    meta["actuator_profile"] = {"name": "damiao-embodiment-ratings-v2", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
                                 "scale=0.25*effort/kp", "joints": table}
     (out / "scene.xml").write_text(scene)
     (out / "meta.json").write_text(json.dumps(meta))

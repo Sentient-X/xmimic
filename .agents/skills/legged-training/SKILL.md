@@ -243,7 +243,7 @@ clip per run.
 
 | Failure | Cause | Fix |
 | --- | --- | --- |
-| PD-only stand topples about the ankles after 1.2-2.2 s | Ankle gravity stiffness m·g·h ≈ 240 Nm/rad exceeds any armature-rule kp (G1 baseline ankle kp is 28.5). | Expected. Report it, don't tune it away. The policy balances. Check static torque capacity instead (`--check`: deep squat peaks at 23% of rating). |
+| PD-only stand topples about the ankles after 1.2-2.2 s (ds1, linkage armature 0.04 gives ankle kp 158) | Ankle gravity stiffness m·g·h ≈ 240 Nm/rad is above that kp. | Expected below that kp. Report it, don't tune it away. With embody's linkage armature 0.064 (ds2, kp 253) the PD stand holds 3 s. Static capacity (`--check`): deep squat peaks at 18% of rating. |
 | Torso folds forward under PD | Armature 0.0072 (G1 class) gives waist kp 28, below the upper body's ~45 Nm/rad. | Use the reflected inertia of the 40:1 DM4340 linkage (armature 0.04, kp 158). |
 | Hand-set bent-knee default looks wrong | Left and right knees have opposite axes. | Keep default zero. The policy is a residual on the reference, so the default only centres observations. |
 | Geometric mirror finds no partners | The body's joints are centred at y ≈ -0.06, and linkage pivots sit up to 8 cm off-symmetric. | Pair by left/right name swap, sign from world axes (pseudovector (-x, y, -z)). |

@@ -220,6 +220,22 @@ reference motion it tracks.</div>
 {table}</table>""")
 
 
+def evaluate_clip(job):
+    """Roll out one clip from its first frame, score it and render its video (one process per clip with --jobs)."""
+    ckpt, clip, motion_dir, robot_dir, out, tagline, no_video = job
+    robot = Path(robot_dir)
+    meta = json.loads((robot / "meta.json").read_text())
+    phys = mujoco.MjModel.from_xml_path(str(robot / "scene.xml"))
+    r = rollout(ckpt, clip, 0.0, None, motion_dir, robot_dir)
+    metrics = {"clip": clip, **tracking_metrics(phys, meta, r["qpos"], r["ref_qpos"], np.asarray(r["alive"]))}
+    print(json.dumps(metrics), flush=True)
+    if not no_video:
+        sim_m = render_model(robot / "scene.xml")
+        ref_m = render_model(robot / "scene.xml", tint=(0.25, 0.5, 1.0))
+        write_video(str(Path(out) / f"{clip}.mp4"), clip, r, metrics, tagline, sim_m, ref_m)
+    return metrics
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt")
@@ -230,24 +246,24 @@ def main():
     ap.add_argument("--label", default="datasheet actuators")
     ap.add_argument("--run", default="")
     ap.add_argument("--no_video", action="store_true")
+    ap.add_argument("--jobs", type=int, default=1, help="clips evaluated and rendered in parallel processes")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     robot = Path(a.robot_dir)
-    meta = json.loads((robot / "meta.json").read_text())
     clips = [c for c in a.clips.split(",") if c] or sorted(p.stem for p in Path(a.motion_dir).glob("*.npz"))
-    phys = mujoco.MjModel.from_xml_path(str(robot / "scene.xml"))
-    sim_m, ref_m = render_model(robot / "scene.xml"), render_model(robot / "scene.xml", tint=(0.25, 0.5, 1.0))
+    render_meshes(robot / "scene.xml", (robot / "scene.xml").read_text())  # build the shared mesh cache once
     it = json.loads(str(np.load(a.ckpt)["meta"]))["iteration"]
     tagline = f"Simulation · Sentient humanoid · {a.label} · XMimic"
-    rows = []
-    for clip in clips:
-        r = rollout(a.ckpt, clip, 0.0, None, a.motion_dir, a.robot_dir)
-        metrics = {"clip": clip, **tracking_metrics(phys, meta, r["qpos"], r["ref_qpos"], np.asarray(r["alive"]))}
-        rows.append(metrics)
-        print(json.dumps(metrics), flush=True)
-        if not a.no_video:
-            write_video(str(out / f"{clip}.mp4"), clip, r, metrics, tagline, sim_m, ref_m)
+    jobs = [(a.ckpt, clip, a.motion_dir, str(robot), str(out), tagline, a.no_video) for clip in clips]
+    if a.jobs > 1:
+        import concurrent.futures
+        import multiprocessing
+
+        with concurrent.futures.ProcessPoolExecutor(a.jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
+            rows = list(pool.map(evaluate_clip, jobs))
+    else:
+        rows = [evaluate_clip(j) for j in jobs]
     header = f"Policy {a.run} checkpoint iteration {it} · {a.label} · XMimic world-model tracker trained on Modal"
     summary = {"checkpoint": os.path.abspath(a.ckpt), "iteration": it, "run": a.run, "label": a.label, "clips": rows,
                "tracked": sum(not r["fell"] for r in rows), "total": len(rows)}
