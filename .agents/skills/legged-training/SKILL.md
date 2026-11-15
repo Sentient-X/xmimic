@@ -5,8 +5,38 @@ description: Use when adapting XMimic to a SentientX legged embodiment, preparin
 
 # Legged training
 
+## Whole-body site-calibrated retargeting (2026-11-16)
+
+Method, derivations, judging harness and the full failure table: `docs/whole-body-retarget.md`.
+Use it, not the URR direction fit, for BONES-SEED reference motions. Run in a private venv
+(`uv venv` + `mujoco scipy matplotlib pillow imageio imageio-ffmpeg pytest`), never the shared one.
+
+```bash
+PY=~/.cache/retarget-venv/.venv/bin/python
+JAX_PLATFORMS=cpu PYTHONPATH=. $PY -m pytest -q tests/test_retarget_whole_body.py   # 1 passed, ~6-12 s
+# clips: modal volume get bones-seed-clips demo-pool-v1 data/bones_seed/demo-pool-v1-local
+$PY -m tools.retarget_clips $COMMON --embodiment-id ID --joint-names META --output RUN CLIP.bvh
+$PY -m tools.judge_retarget $COMMON RUN/<clip>        # keyframes.png, summary.png, sidebyside.mp4
+$PY -m tools.package_retargets --judgments J.json --output OUT --volume xmimic-motions
+```
+
+Observed on body ca3fb7: nominal clip raw direction max 31.6 deg (URR v3: 63.3); 22 clips
+judged, 17 accepted, uploaded as `xmimic-motions:/batch1`, `/batch2` with manifests.
+Judge by reading the PNGs yourself: numbers first (heatmap, joint-at-limit map), then
+`keyframes.png` for every accepted clip. For many clips, crop the 3/4 column of each sheet
+into one montage (six clips per image) so one Read covers a batch.
+Colour mismatch between a robot link and its skeleton segment = handedness or bend error.
+A joint pinned in the at-limit map for seconds is either a wrong calibration (all clips,
+e.g. hip yaw at +-90 deg) or a body range (one joint, physically meaningful poses).
+Check a suspect range with FK before blaming the solver: on ca3fb7 the elbows flex only
+90 deg and the right hip abducts only 16 deg (reported to the embodiment owner).
+Stop: changed body identity (re-run all), a screen threshold you want to widen (don't),
+any silent crop. Never commit BVH, motions or renders.
+
 Read `docs/sentientx-integration.md`, `docs/motion-inputs.md` and
-`docs/bones-seed.md` before extending this path. Robot facts belong to
+`docs/bones-seed.md` before extending this path. For retargeting human clips onto a body,
+start at "Whole-body site-calibrated retargeting (2026-11-16)" below; it supersedes the
+endpoint-only and URR-direction attempts recorded later in this file. Robot facts belong to
 `sx-embodiments`; XMimic consumes their simulation projection. Never repair a
 full-body model by copying corrected upper-body constants into this repository.
 

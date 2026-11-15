@@ -1,0 +1,14 @@
+{
+  "schema": "xmimic.source-correspondence/v1",
+  "source_skeleton": "BONES-SEED SOMA uniform BVH",
+  "world_from_source": [[0,0,1,0],[1,0,0,0],[0,1,0,0],[0,0,0,1]],
+  "note": "Source-side declaration only: semantic site name (the shared body vocabulary) -> SOMA joint. No robot facts.",
+  "sites": {
+    "pelvis": "Hips",
+    "chest": "Chest",
+    "left_shoulder": "LeftArm", "left_elbow": "LeftForeArm", "left_wrist": "LeftHand", "left_hand": "LeftHandMiddle1",
+    "right_shoulder": "RightArm", "right_elbow": "RightForeArm", "right_wrist": "RightHand", "right_hand": "RightHandMiddle1",
+    "left_hip": "LeftLeg", "left_knee": "LeftShin", "left_ankle": "LeftFoot", "left_toe_edge": "LeftToeEnd",
+    "right_hip": "RightLeg", "right_knee": "RightShin", "right_ankle": "RightFoot", "right_toe_edge": "RightToeEnd"
+  }
+}
