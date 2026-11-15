@@ -32,6 +32,10 @@ Check a suspect range with FK of a distal point before blaming the solver or the
 ca3fb7 the elbows flex only 90 deg: a real hardware stop, so declare `--retarget-limits` to keep
 references out of the past-straight swing (check every packaged clip: elbow never past straight). A hip-roll "unmirrored" claim made
 from the local joint axis was wrong (the right axis is -X in world) and cost a re-run.
+Flips that a policy drops at flight: run `tools.flight_consistency` (doc section "Dynamically
+consistent flight"); it reports CoM parabola residual, angular-momentum drift and takeoff speed
+needed vs achievable per flight. Publish each change as a new version path (the packager refuses
+to overwrite: a paid run may be reading it).
 Stop: changed body identity (re-run all), a screen threshold you want to widen (don't),
 any silent crop. Never commit BVH, motions or renders.
 
