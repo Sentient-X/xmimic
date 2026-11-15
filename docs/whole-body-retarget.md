@@ -37,6 +37,10 @@ The source BVH `Root` joint (a ground projection) is excluded from the human low
 
 ## Judging harness
 
+`tools/package_retargets.py --flat --ratings RATINGS.json` writes the trainer's flat directory (one
+`<clip>.npz` each, manifest beside it, not inside) and per joint the peak speed over the actuator's
+rated and no-load speed (`speed_over_rating`, `joints_over_no_load`).
+
 `tools/judge_retarget.py` writes, per clip, under `<clip>/judge/`:
 
 - `keyframes.png`: phase keyframes (takeoff, most inverted, apex, landing; otherwise limb
@@ -71,7 +75,7 @@ Same 599-frame nominal clip as the rejected URR run, same raw metric (robot site
 joint pair): max 31.6 degrees here vs 63.3 degrees for `urr-profile-v3`. Calibration residual
 max 11.0 degrees (leg site pairs sit on link origins offset from the bone line).
 Solve 50-130 s per 500-1000 frame clip on one CPU core; judging about 2.5 min per clip.
-22 clips judged, 17 accepted (4 backflips, 2 front flips, 2 side flips, 2 cartwheels, dances,
+22 clips judged, 18 accepted (final set on `xmimic-runs:motions/demo-motions-v1`) (4 backflips, 2 front flips, 2 side flips, 2 cartwheels, dances,
 floor scissor kick, broad jump, boxing, high knees). Every clip fails the 15 degree p99 screen;
 the dominant errors are arm segments at body joint-range limits (see below).
 
@@ -85,7 +89,8 @@ the dominant errors are arm segments at body joint-range limits (see below).
 | Limb re-seed experiment | Rarely triggered (errors < 6 cm), and the one switch it made produced an 81 rad/s pop | Removed |
 | Synthetic test joints frozen | MJCF without `angle="radian"` reads ranges in degrees | Test body declares radians; real scenes already do |
 | Elbows stuck at limit 50 % of the calm nominal clip | Body model: elbow q=0 is 90 deg flexed, range allows 0-90 deg flexion and ~80 deg hyperextension | Body range bug reported to the embodiment owner; not compensated here |
-| Mirrored cartwheel / jumping jack legs do not spread | right_hip_roll range [-0.28, 1.92] is the left range unmirrored: 16 deg abduction | Body range; clips rejected until corrected |
+| Claimed right_hip_roll range was unmirrored (wrong) | Read `jnt_axis` in the joint's local frame; in world the right axis is -X, so +roll abducts and [-0.28, 1.92] is correct | Always judge a range by FK of a distal point, never by local axis + numbers. A declared mirrored override made the cartwheel worse (right leg pinned at the new limit, 45 deg) and was withdrawn; the arm-yaw "offset" claim had no FK and was retracted |
+| Mirrored cartwheel legs do not split | Genuine 16 deg adduction limit on the leading leg plus the elbow cap | Rejected; the jumping jack, first rejected from the 3/4 view, matches in the front view and was accepted |
 
 Stop conditions: a changed body identity means re-running every clip; never widen the screen
 after seeing results; never crop silently (`--window` is recorded in metrics.json). BVH, motions

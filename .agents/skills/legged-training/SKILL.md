@@ -21,15 +21,16 @@ $PY -m tools.package_retargets --judgments J.json --output OUT --volume xmimic-m
 ```
 
 Observed on body ca3fb7: nominal clip raw direction max 31.6 deg (URR v3: 63.3); 22 clips
-judged, 17 accepted, uploaded as `xmimic-motions:/batch1`, `/batch2` with manifests.
+judged, 18 accepted; final flat set on `xmimic-runs:motions/demo-motions-v1` (+ `.manifest.json`).
 Judge by reading the PNGs yourself: numbers first (heatmap, joint-at-limit map), then
 `keyframes.png` for every accepted clip. For many clips, crop the 3/4 column of each sheet
 into one montage (six clips per image) so one Read covers a batch.
 Colour mismatch between a robot link and its skeleton segment = handedness or bend error.
 A joint pinned in the at-limit map for seconds is either a wrong calibration (all clips,
 e.g. hip yaw at +-90 deg) or a body range (one joint, physically meaningful poses).
-Check a suspect range with FK before blaming the solver: on ca3fb7 the elbows flex only
-90 deg and the right hip abducts only 16 deg (reported to the embodiment owner).
+Check a suspect range with FK of a distal point before blaming the solver or the body: on
+ca3fb7 the elbows flex only 90 deg (FK-measured, reported). A hip-roll "unmirrored" claim made
+from the local joint axis was wrong (the right axis is -X in world) and cost a re-run.
 Stop: changed body identity (re-run all), a screen threshold you want to widen (don't),
 any silent crop. Never commit BVH, motions or renders.
 
