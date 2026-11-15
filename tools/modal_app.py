@@ -93,10 +93,14 @@ def _train(name: str, argv: list[str], robot: str, motions: str, snapshot_every:
         os.symlink(f"{MNT}/robots/g1/assets", "/opt/xmimic/assets/g1/assets")
     cfg = parse_args(["--log_dir", str(run), "--robot_dir", robot_dir, "--motion_dir", f"{MNT}/motions/{motions}",
                       "--motion_format", fmt, *argv])
-    request = {"argv": argv, "robot": robot, "motions": motions}
+    def program(args):  # --max_minutes is operational (the training clock carries over on resume): a resume may extend it
+        return [a for i, a in enumerate(args) if a != "--max_minutes" and (i == 0 or args[i - 1] != "--max_minutes")]
+
+    request = {"argv": program(argv), "robot": robot, "motions": motions}
     run.mkdir(parents=True, exist_ok=True)
     req_file = run / "request.json"
-    if req_file.exists() and json.loads(req_file.read_text()) != request:
+    stored = json.loads(req_file.read_text()) if req_file.exists() else None
+    if stored is not None and {**stored, "argv": program(stored["argv"])} != request:
         raise ValueError(f"run {name} exists with different arguments; use a new name")
     req_file.write_text(json.dumps(request, indent=1))
     snaps = sorted((run / "state").glob("state_*")) if (run / "state").exists() else []
@@ -162,16 +166,18 @@ def fetch_lafan():
 
 @app.local_entrypoint()
 def train(name: str, gpu: str = "H100", args: str = "", robot: str = "g1", motions: str = "lafan1_g1",
-          ledger: str = "results/demo-2026-11-16/costs.json", budget: float = 7.5, snapshot_every: int = 1000):
+          ledger: str = "results/demo-2026-11-16/costs.json", budget: float = 7.5, snapshot_every: int = 1000,
+          timeout_min: int = TIMEOUT_S // 60):
     path = Path(ledger).expanduser()
     spent = sum(c["usd"] for c in _ledger(path))
-    worst = (GPU_PER_S[gpu] + CPU_PER_S) * TIMEOUT_S
-    if spent + worst > budget + 2.0 or spent >= budget:
+    timeout_s = min(timeout_min * 60, TIMEOUT_S)
+    worst = (GPU_PER_S[gpu] + CPU_PER_S) * timeout_s
+    if spent + worst > budget + 1.0 or spent >= budget:
         raise SystemExit(f"ledger {spent:.2f} USD: launching up to {worst:.2f} more would pass the {budget:.2f} budget")
     t0 = time.time()
     status, out = "failed", None
     try:
-        out = TRAIN[gpu].remote(name, shlex.split(args), robot, motions, snapshot_every)
+        out = TRAIN[gpu].with_options(timeout=timeout_s).remote(name, shlex.split(args), robot, motions, snapshot_every)
         status = "ok"
     finally:  # the wall time of the call bounds its billed time (cold start included): a conservative ledger
         s = time.time() - t0

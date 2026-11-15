@@ -1,6 +1,6 @@
 """Derive an experiment robot bundle whose actuators follow Damiao datasheet torque ratings instead of nominal role gains.
 
-    python tools/datasheet_profile.py <robot_dir> <out_dir> [--check]
+    python tools/datasheet_profile.py <robot_dir> <out_dir> [--ratings ratings.json] [--check]
 
 Interim profile until sx-embodiments exports the real ratings: body geometry, inertials and embodiment_id are unchanged;
 only actuator effort, armature, PD gains and action scale change, and a sagittal mirror is added when the geometry gives one. Gains follow the
@@ -26,19 +26,33 @@ W = 2 * math.pi * 10.0
 ZETA = 2.0
 # joint-name pattern -> (motor, peak torque Nm, estimated armature kg m^2, source)
 RATINGS = [
-    (r"_hip_(pitch|roll)_joint$", "DM10010", 120.0, 0.050, "datasheet"),
-    (r"_knee_joint$", "DM10010", 120.0, 0.050, "datasheet"),
-    (r"_hip_yaw_joint$", "DM8009", 40.0, 0.020, "datasheet"),
-    (r"^torso_joint$", "DM8009", 40.0, 0.020, "datasheet"),
-    # 2 x DM4340 (40:1) parallel linkages: the inscribed per-axis box of two 27 Nm motors at unit lever ratio
-    (r"_foot[12]_joint$", "2xDM4340 linkage", 27.0, 0.040, "datasheet, per-axis inscribed box"),
-    (r"^waist_(roll|pitch)_joint$", "2xDM4340 linkage", 27.0, 0.040, "datasheet, per-axis inscribed box"),
-    (r"_(shoulder_pitch|shoulder_roll|upper_arm_yaw|elbow_pitch)_joint$", "arm (unrated)", 27.0, 0.010, "nominal: no rating supplied"),
-    (r"_(forearm_yaw|wrist_pitch|wrist_roll)_joint$", "wrist (unrated)", 7.0, 0.004, "nominal: no rating supplied"),
+    (r"_hip_(pitch|roll)_joint$", "DM10010", 150.0, 0.050, "embodiment ratings; armature estimated (not published)"),
+    (r"_knee_joint$", "DM10010", 150.0, 0.050, "embodiment ratings; armature estimated (not published)"),
+    (r"_hip_yaw_joint$", "DM8009", 40.0, 0.020, "embodiment ratings"),
+    (r"^torso_joint$", "DM8009", 40.0, 0.020, "embodiment ratings"),
+    # two DM4340 through a linkage at unit lever ratio: an upper bound, not measured
+    (r"_foot[12]_joint$", "2xDM4340 linkage", 54.0, 0.064, "embodiment ratings (linkage upper bound)"),
+    (r"^waist_(roll|pitch)_joint$", "2xDM4340 linkage", 54.0, 0.064, "embodiment ratings (linkage upper bound)"),
+    (r"_shoulder_(pitch|roll)_joint$", "DM8009P", 40.0, 0.020, "embodiment ratings; joint mapping assumed"),
+    (r"_(upper_arm_yaw|elbow_pitch)_joint$", "DM4340", 27.0, 0.032, "embodiment ratings; joint mapping assumed"),
+    (r"_(forearm_yaw|wrist_pitch|wrist_roll)_joint$", "DM4310", 7.0, 0.004, "embodiment ratings; armature estimated"),
     (r"_finger_joint$", "YUBI gripper (unrated)", 5.0, 0.004, "nominal: no rating supplied"),
 ]
 # The default pose stays the bundle's (zero): the policy acts as a residual on the reference (target = q_ref + scale * a),
 # so the default only centres observations. A hand-set crouch is wrong here: the left and right knees have opposite axes.
+
+
+# Stated assumptions for drives the layer publishes no armature for (not datasheet numbers): reflected rotor inertia,
+# order of magnitude.
+ASSUMED_ARMATURE = {"damiao_dm10010": 0.05, "feetech_sts3215": 0.004}
+
+
+def layer_rating(entry: dict):
+    """(drive, effort, armature, source) from one joint of a ratings file exported from sx_embodiments.joint_rating."""
+    armature, source = entry["armature"], "sx-embodiments rating"
+    if armature is None:
+        armature, source = ASSUMED_ARMATURE[entry["drive"]], "sx-embodiments rating; armature assumed (not published)"
+    return entry["drive"], float(entry["effort"]), float(armature), source
 
 
 def rating(name: str):
@@ -79,17 +93,18 @@ def geometric_mirror(scene: Path, joint_names: list[str]):
     return perm, signs
 
 
-def derive(robot: Path, out: Path) -> dict:
+def derive(robot: Path, out: Path, ratings: dict | None = None) -> dict:
     meta = json.loads((robot / "meta.json").read_text())
     scene = (robot / "scene.xml").read_text()
     shutil.copytree(robot, out, ignore=shutil.ignore_patterns("scene.xml", "meta.json"), symlinks=True)
     table, scales, defaults = [], [], []
     for name in meta["joint_names"]:
-        motor, effort, armature, source = rating(name)
+        motor, effort, armature, source = layer_rating(ratings["joints"][name]) if ratings else rating(name)
         kp, kd = armature * W * W, 2 * ZETA * armature * W
         q0 = float(meta["default_joint_pos"][meta["joint_names"].index(name)])
         table.append({"joint": name, "motor": motor, "effort_nm": effort, "armature": armature, "kp": round(kp, 4),
-                      "kd": round(kd, 4), "action_scale": round(0.25 * effort / kp, 4), "default": q0, "source": source})
+                      "kd": round(kd, 4), "action_scale": round(0.25 * effort / kp, 4), "default": q0, "source": source,
+                      "rated_velocity": ratings["joints"][name]["velocity"] if ratings else None})
         scales.append(0.25 * effort / kp)
         defaults.append(q0)
         joint = re.compile(rf'(<joint name="{re.escape(name)}"[^>]*?armature=")[^"]*(")')
@@ -111,7 +126,8 @@ def derive(robot: Path, out: Path) -> dict:
     mirror = geometric_mirror(robot / "scene.xml", meta["joint_names"])
     if mirror is not None and meta.get("mirror_permutation") is None:
         meta["mirror_permutation"], meta["mirror_signs"] = mirror
-    meta["actuator_profile"] = {"name": "damiao-datasheet-v1", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
+    meta["actuator_profile"] = {"name": "sx-embodiments-ratings" if ratings else "damiao-embodiment-ratings-v2",
+                                "ratings_source": ratings["source"] if ratings else "table in tools/datasheet_profile.py", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
                                 "scale=0.25*effort/kp", "joints": table}
     (out / "scene.xml").write_text(scene)
     (out / "meta.json").write_text(json.dumps(meta))
@@ -178,10 +194,11 @@ def main():
     ap.add_argument("robot", type=Path)
     ap.add_argument("out", type=Path)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--ratings", type=Path, help="joint ratings exported from sx_embodiments.joint_rating (preferred)")
     a = ap.parse_args()
     if a.out.exists():
         raise SystemExit(f"{a.out} exists; derive into a new directory")
-    derive(a.robot, a.out)
+    derive(a.robot, a.out, json.loads(a.ratings.read_text()) if a.ratings else None)
     if a.check:
         result = check(a.out)
         (a.out / "pd-hold.json").write_text(json.dumps(result, indent=1))

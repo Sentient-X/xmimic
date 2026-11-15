@@ -124,7 +124,7 @@ class View:
         self.d.qpos[:] = qpos
         mujoco.mj_forward(self.m, self.d)
         target = qpos[:3].copy()
-        target[2] = 0.65
+        target[2] = max(0.65, float(qpos[2]) - 0.05)  # follow the root up in flight
         self.look = target if self.look is None else 0.9 * self.look + 0.1 * target  # smooth tracking
         self.cam.lookat[:], self.cam.azimuth, self.cam.elevation, self.cam.distance = self.look, azimuth, elevation, distance
         self.r.update_scene(self.d, self.cam, self.opt)
@@ -146,7 +146,15 @@ def tracking_metrics(m, meta, qpos, ref_qpos, alive):
         err_w.append(np.linalg.norm(a - b, axis=-1).mean())
         err_r.append(np.linalg.norm((a - q[fq : fq + 3]) - (b - qr[fq : fq + 3]), axis=-1).mean())
     fell = not bool(alive[-1])
-    return {"fell": fell, "survived_frac": float(alive.mean()), "steps": int(len(alive) - 1),
+    # joint speed against the rated (24 V) speed: the simulation limits torque only, so report what a speed limit
+    # would have cut
+    rated = {j["joint"]: j.get("rated_velocity") for j in meta.get("actuator_profile", {}).get("joints", [])}
+    speed = np.abs(np.diff(qpos[alive][:, meta["qpos_adr"]], axis=0)) * FPS
+    ratio = [float(speed[:, i].max() / rated[n]) for i, n in enumerate(meta["joint_names"]) if rated.get(n) and len(speed)]
+    worst = int(np.argmax(ratio)) if ratio else None
+    over = {"peak_speed_over_rated": max(ratio) if ratio else None,
+            "peak_speed_joint": [n for n in meta["joint_names"] if rated.get(n)][worst] if ratio else None}
+    return {"fell": fell, **over, "survived_frac": float(alive.mean()), "steps": int(len(alive) - 1),
             "body_pos_err_m": float(np.mean(err_w)), "body_pos_err_rootrel_m": float(np.mean(err_r))}
 
 
@@ -192,6 +200,16 @@ def write_video(path, clip, r, metrics, tagline, sim_m, ref_m):
             w.append_data(np.concatenate([np.concatenate([a, b], 1), np.concatenate([c, e], 1)], 0))
 
 
+def speed_note(r):
+    peak = r.get("peak_speed_over_rated")
+    return "" if peak is None else f" · peak joint speed {peak:.1f}× rated ({html.escape(r['peak_speed_joint'])})"
+
+
+def speed_cell(r):
+    peak = r.get("peak_speed_over_rated")
+    return "" if peak is None else f"{peak:.2f}"
+
+
 def gallery(out: Path, rows, header):
     cells = []
     for r in rows:
@@ -199,10 +217,12 @@ def gallery(out: Path, rows, header):
         cells.append(f'<figure><video src="{html.escape(r["clip"])}.mp4" controls loop muted preload="metadata"></video>'
                      f'<figcaption><b>{html.escape(r["clip"])}</b> {badge}<br>body error {100 * r["body_pos_err_m"]:.1f} cm · '
                      f'root-relative {100 * r["body_pos_err_rootrel_m"]:.1f} cm · survived {100 * r["survived_frac"]:.0f}%'
+                     f'{speed_note(r)}'
                      f'</figcaption></figure>')
     table = "".join(f'<tr><td>{html.escape(r["clip"])}</td><td>{"fell" if r["fell"] else "no"}</td>'
                     f'<td>{100 * r["survived_frac"]:.0f}%</td><td>{100 * r["body_pos_err_m"]:.1f}</td>'
-                    f'<td>{100 * r["body_pos_err_rootrel_m"]:.1f}</td><td>{r["steps"] / FPS:.1f}</td></tr>' for r in rows)
+                    f'<td>{100 * r["body_pos_err_rootrel_m"]:.1f}</td><td>{r["steps"] / FPS:.1f}</td>'
+                    f'<td>{speed_cell(r)}</td></tr>' for r in rows)
     ok = sum(not r["fell"] for r in rows)
     (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><title>Sentient humanoid · XMimic</title>
 <style>body{{background:#0b0d12;color:#e8e8ea;font:15px -apple-system,Helvetica,sans-serif;margin:32px}}
@@ -213,11 +233,28 @@ video{{width:100%;border-radius:8px;background:#000}} figure{{margin:0}} figcapt
 table{{border-collapse:collapse;margin:26px 0}} td,th{{padding:5px 14px;border-bottom:1px solid #262a33;text-align:left}}</style>
 <h1>Sentient humanoid · motion tracking in simulation</h1>
 <div class="sub">{html.escape(header)}<br>{ok} of {len(rows)} clips tracked to the end without falling.
-Simulation only (MuJoCo); no physical robot was commanded. Left: simulated robot under the policy. Right: the kinematic
+Simulation only (MuJoCo); no physical robot was commanded. Actuators are torque-limited to their sx-embodiments
+ratings; joint speed is not limited in simulation, so each clip reports its peak joint speed against the rated 24 V speed. Left: simulated robot under the policy. Right: the kinematic
 reference motion it tracks.</div>
 <div class="grid">{''.join(cells)}</div>
-<table><tr><th>clip</th><th>fell</th><th>survived</th><th>body err (cm)</th><th>root-rel err (cm)</th><th>length (s)</th></tr>
+<table><tr><th>clip</th><th>fell</th><th>survived</th><th>body err (cm)</th><th>root-rel err (cm)</th><th>length (s)</th><th>peak speed / rated</th></tr>
 {table}</table>""")
+
+
+def evaluate_clip(job):
+    """Roll out one clip from its first frame, score it and render its video (one process per clip with --jobs)."""
+    ckpt, clip, motion_dir, robot_dir, out, tagline, no_video = job
+    robot = Path(robot_dir)
+    meta = json.loads((robot / "meta.json").read_text())
+    phys = mujoco.MjModel.from_xml_path(str(robot / "scene.xml"))
+    r = rollout(ckpt, clip, 0.0, None, motion_dir, robot_dir)
+    metrics = {"clip": clip, **tracking_metrics(phys, meta, r["qpos"], r["ref_qpos"], np.asarray(r["alive"]))}
+    print(json.dumps(metrics), flush=True)
+    if not no_video:
+        sim_m = render_model(robot / "scene.xml")
+        ref_m = render_model(robot / "scene.xml", tint=(0.25, 0.5, 1.0))
+        write_video(str(Path(out) / f"{clip}.mp4"), clip, r, metrics, tagline, sim_m, ref_m)
+    return metrics
 
 
 def main():
@@ -230,33 +267,33 @@ def main():
     ap.add_argument("--label", default="datasheet actuators")
     ap.add_argument("--run", default="")
     ap.add_argument("--no_video", action="store_true")
+    ap.add_argument("--jobs", type=int, default=1, help="clips evaluated and rendered in parallel processes")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     robot = Path(a.robot_dir)
-    meta = json.loads((robot / "meta.json").read_text())
     clips = [c for c in a.clips.split(",") if c] or sorted(p.stem for p in Path(a.motion_dir).glob("*.npz"))
-    phys = mujoco.MjModel.from_xml_path(str(robot / "scene.xml"))
-    sim_m, ref_m = render_model(robot / "scene.xml"), render_model(robot / "scene.xml", tint=(0.25, 0.5, 1.0))
+    render_meshes(robot / "scene.xml", (robot / "scene.xml").read_text())  # build the shared mesh cache once
     it = json.loads(str(np.load(a.ckpt)["meta"]))["iteration"]
     tagline = f"Simulation · Sentient humanoid · {a.label} · XMimic"
-    rows = []
-    for clip in clips:
-        r = rollout(a.ckpt, clip, 0.0, None, a.motion_dir, a.robot_dir)
-        metrics = {"clip": clip, **tracking_metrics(phys, meta, r["qpos"], r["ref_qpos"], np.asarray(r["alive"]))}
-        rows.append(metrics)
-        print(json.dumps(metrics), flush=True)
-        if not a.no_video:
-            write_video(str(out / f"{clip}.mp4"), clip, r, metrics, tagline, sim_m, ref_m)
+    jobs = [(a.ckpt, clip, a.motion_dir, str(robot), str(out), tagline, a.no_video) for clip in clips]
+    if a.jobs > 1:
+        import concurrent.futures
+        import multiprocessing
+
+        with concurrent.futures.ProcessPoolExecutor(a.jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
+            rows = list(pool.map(evaluate_clip, jobs))
+    else:
+        rows = [evaluate_clip(j) for j in jobs]
     header = f"Policy {a.run} checkpoint iteration {it} · {a.label} · XMimic world-model tracker trained on Modal"
     summary = {"checkpoint": os.path.abspath(a.ckpt), "iteration": it, "run": a.run, "label": a.label, "clips": rows,
                "tracked": sum(not r["fell"] for r in rows), "total": len(rows)}
     (out / "metrics.json").write_text(json.dumps(summary, indent=1))
     with (out / "metrics.csv").open("w") as f:
-        f.write("clip,fell,survived_frac,body_pos_err_m,body_pos_err_rootrel_m,steps\n")
+        f.write("clip,fell,survived_frac,body_pos_err_m,body_pos_err_rootrel_m,steps,peak_speed_over_rated,peak_speed_joint\n")
         for r in rows:
             f.write(f"{r['clip']},{int(r['fell'])},{r['survived_frac']:.4f},{r['body_pos_err_m']:.4f},"
-                    f"{r['body_pos_err_rootrel_m']:.4f},{r['steps']}\n")
+                    f"{r['body_pos_err_rootrel_m']:.4f},{r['steps']},{r.get('peak_speed_over_rated')},{r.get('peak_speed_joint')}\n")
     gallery(out, rows, header)
     print(f"{summary['tracked']}/{summary['total']} tracked -> {out / 'index.html'}")
 

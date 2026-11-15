@@ -17,9 +17,9 @@ def test_ratings_cover_the_sentient_joints_and_follow_the_gain_rule():
     names = ["torso_joint", "waist_roll_joint", "left_hip_pitch_joint", "right_knee_joint", "left_foot2_joint",
              "right_hip_yaw_joint", "left_elbow_pitch_joint", "right_wrist_roll_joint", "left_gripper_left_finger_joint"]
     efforts = {n: dp.rating(n)[1] for n in names}
-    assert efforts["left_hip_pitch_joint"] == efforts["right_knee_joint"] == 120.0
+    assert efforts["left_hip_pitch_joint"] == efforts["right_knee_joint"] == 150.0
     assert efforts["right_hip_yaw_joint"] == efforts["torso_joint"] == 40.0
-    assert efforts["left_foot2_joint"] == efforts["waist_roll_joint"] == 27.0
+    assert efforts["left_foot2_joint"] == efforts["waist_roll_joint"] == 54.0
     with pytest.raises(ValueError):
         dp.rating("neck_yaw_joint")
     armature = dp.rating("left_knee_joint")[2]
