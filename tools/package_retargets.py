@@ -24,10 +24,15 @@ def main() -> None:
     p.add_argument("--judgments", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--volume", default=None)
+    p.add_argument("--volume-path", default=None, help="destination inside the volume (default: OUT_DIR name)")
+    p.add_argument("--ratings", default=None, help="JSON {models: {m: {peak_nm, rated_rad_s, no_load_rad_s}}, joints: {j: m}}")
+    p.add_argument("--flat", action="store_true", help="motions directly in OUT_DIR (trainer's flat layout)")
     args = p.parse_args()
     spec = json.loads(Path(args.judgments).read_text())
     out = Path(args.output)
-    (out / "motions").mkdir(parents=True, exist_ok=True)
+    motions = out if args.flat else out / "motions"
+    motions.mkdir(parents=True, exist_ok=True)
+    ratings = json.loads(Path(args.ratings).read_text()) if args.ratings else None
     entries = []
     for c in spec["clips"]:
         run = Path(c["run_dir"])
@@ -44,20 +49,34 @@ def main() -> None:
             "airborne_fraction": metrics["airborne_fraction"], "root_tilt_max_deg": metrics["root_tilt_max_deg"],
             "judge_images": str(run / "judge"),
         }
+        if ratings:
+            # peak joint speed over the rated (24 V) and no-load speed of the joint's actuator; >1 = aggressive
+            speed = {}
+            for joint, v in metrics["joint_peak_speed_rad_s"].items():
+                model = ratings["models"].get(ratings["joints"].get(joint, ""), None)
+                if model:
+                    speed[joint] = {"rated": round(v / model["rated_rad_s"], 2),
+                                    "no_load": round(v / model["no_load_rad_s"], 2)}
+            entry["speed_over_rating"] = speed
+            entry["joints_over_no_load"] = sorted(j for j, r in speed.items() if r["no_load"] > 1)
         if c["accepted"]:
-            dst = out / "motions" / f"{metrics['clip']}.npz"
+            dst = motions / f"{metrics['clip']}.npz"
             shutil.copyfile(run / "motion.npz", dst)
-            entry["motion"] = f"motions/{dst.name}"
+            entry["motion"] = str(dst.relative_to(out))
             entry["motion_sha256"] = hashlib.sha256(dst.read_bytes()).hexdigest()
         entries.append(entry)
     manifest = {"schema": "xmimic.retarget-batch/v1", "body": spec["body"], "method": spec.get("method", {}),
+                "ratings": ratings and ratings.get("source"),
                 "accepted": sum(e["accepted"] for e in entries), "clips": entries}
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    # the trainer reads every top-level file of a flat directory as a clip: keep the manifest beside it
+    manifest_path = (out.parent / f"{out.name}.manifest.json") if args.flat else out / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=1))
     print(f"{manifest['accepted']} accepted of {len(entries)} -> {out}")
     if args.volume:
         subprocess.run(["modal", "volume", "create", args.volume], check=False, capture_output=True)
-        subprocess.run(["modal", "volume", "put", "--force", args.volume, str(out), out.name], check=True)
-        print(f"uploaded to modal volume {args.volume}:/{out.name}")
+        dest = args.volume_path or out.name
+        subprocess.run(["modal", "volume", "put", "--force", args.volume, str(out), dest], check=True)
+        print(f"uploaded to modal volume {args.volume}:/{dest}")
 
 
 if __name__ == "__main__":
