@@ -124,7 +124,7 @@ class View:
         self.d.qpos[:] = qpos
         mujoco.mj_forward(self.m, self.d)
         target = qpos[:3].copy()
-        target[2] = 0.65
+        target[2] = max(0.65, float(qpos[2]) - 0.05)  # follow the root up in flight
         self.look = target if self.look is None else 0.9 * self.look + 0.1 * target  # smooth tracking
         self.cam.lookat[:], self.cam.azimuth, self.cam.elevation, self.cam.distance = self.look, azimuth, elevation, distance
         self.r.update_scene(self.d, self.cam, self.opt)

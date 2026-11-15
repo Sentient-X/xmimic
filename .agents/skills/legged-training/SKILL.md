@@ -233,6 +233,10 @@ needed no special build):
 | --- | --- | --- | --- | --- | --- |
 | G1, 40 LAFAN clips, 1050 it | 85 s | 381 s (`jit_chunk` alone 3m24) | 3.4 min | 16.2 | 710 s / $0.87 |
 | Sentient ds1, 1 clip (997 frames), 3500 it | 95 s | ~6 min (new body = new programs) | 6.2 min | 15-16 (probe sweeps dip to 10) | 878 s / $1.07 |
+| ds3 (sx-embodiments 1e9debe5 ratings), 4 flips + cartwheel + egypt, 6000 it | 39 s | 295 s | 9.9 min | 15 | 946 s / $1.15 |
+| ds3 flip specialist, 4 flips + cartwheel, 12950 it, eprobe_share 0.4 from it 300 | 55 s | 384 s | 24.4 min | 15 | 1920 s / $2.34 |
+| ds3 moves: 2 dances, robot dance, kozak, scissor kick, shadow boxing, broad jump, high-knee jog, egypt; 6450 it | ~60 s | 358 s | 11.3 min | 15 | 1104 s / $1.35 |
+| flip specialist resume, 10 min timeout | 211 s | 302 s (persistent cache missed) | 0.9 min | 15 | 605 s / $0.74, timed out |
 
 The 3500-iteration Sentient policy reached ep_ret 0.856, 0 terminations, 0 probe
 failures. On the CPU evaluation it tracked the whole egypt clip without falling,
@@ -249,6 +253,10 @@ clip per run.
 | Geometric mirror finds no partners | The body's joints are centred at y ≈ -0.06, and linkage pivots sit up to 8 cm off-symmetric. | Pair by left/right name swap, sign from world axes (pseudovector (-x, y, -z)). |
 | Render 1.0-1.2 s per view frame on the Mac | 2M-face CAD meshes plus shadows. Quadric decimation (fast_simplification) stalls on the CAD soup. | Vertex-cluster the render-only meshes to 3 mm cells (233k faces, 0.11 s/view). |
 | Log lines missing from a background `grep -v` | grep block-buffers. | Use `--line-buffered`, or read the output file at the end. |
+| Mixed flips + dance policy: every flip falls at the flight phase, and egypt falls too | Flips dominate the failure-focused resets; plateau from it 2000 at ep_ret 0.3. Reference flips lift the root 0.5-0.67 m. | Train a flip specialist (`--eprobe_share 0.4 --eprobe_start 300 --eprobe_every 100`). At 12500 it, both backflips and the cartwheel tracked to the end; the front and side flips fell at about 51%. Train non-flip moves separately: 6 of 8 tracked. |
+| Resume timed out before training much | Restoring a 5 GB snapshot plus a persistent-cache miss (302 s recompile) took 8.5 min of a 10 min timeout. | Give a resume at least 12 min of setup. Check `cache/jax` entries before relying on the cache. |
+| `modal run ... --timeout_min` says no such option | Modal's CLI turns entrypoint underscores into dashes. | Use `--timeout-min` and `--snapshot-every`. |
+| Peak joint speed 3-4× the 24 V rating on every clip, even shadow boxing | MuJoCo position actuators limit torque, not speed, and the references move fast (retarget's solve bound is 25 rad/s). | Report it per clip (`peak_speed_over_rated`). Joint speed limits in sim are open work, and nothing here qualifies the hardware. |
 | `modal app logs <name>` fails | It wants the app id. | Use the id from `modal app list`. |
 
 Stop conditions: stop launching when the ledger reaches the budget, and check
