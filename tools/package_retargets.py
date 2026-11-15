@@ -49,6 +49,7 @@ def main() -> None:
             "root_external_force_peak_body_weights": metrics["root_external_force_peak_body_weights"],
             "airborne_fraction": metrics["airborne_fraction"], "root_tilt_max_deg": metrics["root_tilt_max_deg"],
             "judge_images": str(run / "judge"),
+            "flight": metrics.get("flight"),
         }
         if ratings:
             # peak joint speed over the rated (24 V) and no-load speed of the joint's actuator; >1 = aggressive

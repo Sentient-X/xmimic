@@ -35,6 +35,36 @@ Each frame first places the floating root exactly on its target pose, so fast ro
 the lowest body mesh point follows the scaled human's lowest joint (never below the floor).
 The source BVH `Root` joint (a ground projection) is excluded from the human lowest point.
 
+## Dynamically consistent flight (`xmimic/retarget_flight.py`)
+
+A kinematic retarget copies the human's flight; with the robot's own masses that flight is not
+physical (on ca3fb7 the flight CoM was 0.07-0.12 m off a gravity parabola and the angular momentum
+about the CoM drifted 20-43 %), and the batch-1 policy fell at flight on every flip. The step keeps
+the joint trajectory and rewrites only the floating root inside each flight window (lowest body
+point above 3 cm for at least 80 ms): root orientation is integrated so the angular momentum about
+the CoM is constant (its axis from the reference mean, magnitude and direction searched so the
+landing orientation matches), then the root translation puts the CoM on the ballistic parabola
+between takeoff and landing CoM; 50 ms blends at both ends. If the needed takeoff vertical speed
+exceeds the bound sum_i |d(CoM - support)_z/dq_i| * rated speed_i, the apex is lowered and the
+flight shortened to 2 v/g-consistent duration (time warp). That bound ignores torque: an upper bound.
+
+```bash
+$PY -m tools.flight_consistency --body-document BODY.json --scene SCENE.xml \
+  --correspondence tools/soma_correspondence.json --ratings RATINGS.json \
+  --speed-override DM10010=10.47 --joint-names META --embodiment-id ID --output OUT_RUN IN_RUN/<clip> ...
+```
+
+Observed on the 8 flips (2026-11-16): CoM residual 0.07-0.12 m -> 0 (flight interior), angular
+momentum drift 0.21-0.43 -> 0.03-0.09 on the main flights, landing orientation error <= 1.5 deg;
+needed takeoff 1.9-2.7 m/s vs bound 3.4-4.6 m/s (48 V DM10010), so no time warp; side-view keyframes
+still read as the same flips. Mid-flight root pitch now differs from the human's (different inertia).
+Published as `xmimic-runs:motions/demo-motions-v3`.
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| Angular momentum all zero / singular solve | `mj_subtreeVel` needs `mj_comVel` first | Call kinematics, comPos, comVel, subtreeVel |
+| Landing 150 deg off after Gauss-Newton on the rotation vector | Rotation-vector residual wraps for a 280 deg flip | Bounded scalar search on the mean-L magnitude, then Nelder-Mead on 3 components |
+
 ## Judging harness
 
 `tools/package_retargets.py --flat --ratings RATINGS.json` writes the trainer's flat directory (one
