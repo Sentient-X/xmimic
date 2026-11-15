@@ -181,3 +181,122 @@ audit resolves development body
 `a2ad7e6e3f2b0cf5a73f1b1255f2e022206a057481ba3b8cb384066b682834b3`.
 The companion remains draft and unpinned; it was tested against the checkout's
 embodiment baseline, not a reconciled newer `main` or deployed station.
+
+## Shared URR source and physical-site retargeting
+
+The SOMA path now converts complete source observations to the existing
+`sx_actions.urr.Motion`; it does not define another motion schema. The explicit
+source correspondence initially preserves SOMA joint names as roles. Positions,
+rotations, literal-period-derived nanosecond timestamps and the chosen world frame
+remain separate from body proportions and joint fitting. Each retained cache includes
+`source-motion.json` and its shared Motion identity, including rejected candidates.
+Changing robot proportions preserves these source bytes. Requalification carries them
+forward without modifying the original cache.
+
+`MotionBinding` resolves source roles to sites owned by the selected embodiment.
+The Sentient example uses chest, shoulder, elbow, wrist, hip, knee, ankle and toe sites;
+it fits eight limb directions, two ankle-to-toe directions and chest/hand orientation.
+Physical sites compose
+with the shared modules. A new body still needs an explicit semantic correspondence,
+frame calibration and supported simulation/control projection. This is not automatic
+anatomy discovery or a claim that every legged embodiment is qualified.
+
+Owner commit `ec1e7fd8248af8ce6ce54ffb2a7ddbc29d9c4ced` adds eight pivot sites, giving
+humanoid identity `eb249c00dcff12dc212db1e6122df0ea4f13d57f17fc90d4c4a8855051e036f5`.
+Its URDF is byte-identical to the approved `ca3fb7` assembly; removing only the new sites
+restores that old identity. This is a new semantic revision, not a new hardware approval.
+The upper-body shoulder sites belong to its shared arm modules, so the static body and
+humanoid inherit the same facts.
+
+The owner rejected the earlier endpoint-only retarget visually on 2026-11-08. Its
+small endpoint residuals missed incorrect limb bends; downstream moving joints were
+also used as fixed anchors, shortening modeled upper arms and thighs. That historical
+cache is retained as a rejected visual diagnostic and remains unadmitted for training.
+A narrow numerical acceptance result is not evidence of faithful motion.
+
+Direction errors now participate in optimization, convergence, frame-journal recovery,
+nominal quality and visualization. Journal v2 retains those errors; explicit v1 reading
+supports only old zero-direction executions. Nominal projection cannot erase a failed
+direction objective. First-pose calibration fits the declared physical point-pair
+directions before assigning hand/chest frame offsets. Feet have no fitted orientation
+offset: that would absorb a wrong initial foot heading into the target itself.
+This nominal calibration does not establish sole contact, no-slip, collision clearance,
+balance or a trained policy. XMimic still needs derived joint references for its current
+tracker; the unchanged URR source remains available for a future direct task-space
+controller consumer.
+
+The historical eight-direction, fitted-foot-orientation599-frame run
+passed geometric goals on7frames, with maximum limb-direction63.34degrees and
+orientation52.90degrees. It failed direction, orientation and speed checks and retained
+only diagnostic output plus the unchanged URR source. Its fitted foot offsets also
+hid incorrect absolute heading, so small foot orientation residuals were misleading.
+No GPU training was started.
+
+Owner revision `aa3c97f421a961ff4ede1cb5518ece7e25efba78` adds two fixed toe sites
+at the midpoints of the literal front sole edges, producing body
+`1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c`.
+The approved URDF remains unchanged; removing those two sites restores `eb249c`.
+The example maps observed `Foot→ToeEnd` to physical ankle→toe-edge directions
+using the existing generic `Direction` constraint. These landmarks belong to the
+shared leg modules. No joint-name conditional, per-foot rotation, new toe joint or
+fitted foot offset is used by the solver. An ankle-to-toe line slopes down and must
+not be treated as a horizontal sole axis; one direction also cannot determine full
+sole orientation or contact.
+
+The viewer independently measures every source frame with MuJoCo FK. Its
+`raw_direction_metrics` compare actual physical point-pair directions to unchanged
+observed source directions, including both 3D angle and gravity-plane heading.
+These measurements use no fitted orientation offsets, and remain full-frame even
+when the display samples a lower frame rate. Undefined projected headings are null.
+
+The same-metric retrospective audit of the old599-frame trajectory found mean
+ankle-to-toe angular errors98.62degrees left and92.12degrees right. On frame zero,
+errors107.36/94.05degrees become1.54/1.66degrees in the new calibration. This is
+only a single-frame improvement: the new calibration remains rejected, with
+leg-direction errors9.56–11.30degrees. A separate bounded least-squares diagnostic
+from two starts also retained approximately10–11degree leg errors while both
+terminal ankle coordinates reached their25degree limits. These local fits do not
+prove global infeasibility or justify changing canonical limits. No new full-clip
+cache or training admission was produced. The owner FK audit found no sideways knee:
+original and current leg axes agree. Pivot-to-pivot limb angles include fixed
+link offsets and differ from native joint angles, so anatomical correspondence
+semantics remain part of the unresolved fit.
+
+A generic numerical correction prevents false convergence when clipping an
+unconstrained least-squares step at a joint limit destroys descent. A projected
+gradient fallback can progress while preserving exact bounds and holds. A separate
+reachable planar fixture reproduces the old stall and verifies the correction;
+it does not establish that the real humanoid target is feasible.
+
+### Generality is an acceptance condition
+
+Embodiment-specific behavior in the retargeting algorithm indicates a missing owner
+capability; putting that behavior into an example or configuration file does not fix it.
+Bodies supply canonical geometry, native ordering, limits, sites and physical relations.
+Source adapters supply observed roles, units, clocks and coordinate frames. Experiments
+supply explicit reference configurations, role/site correspondences, root placement,
+weights and nominal simulation assumptions. The algorithm must not infer those facts
+from a robot name, a joint-name substring or a fixed number of limbs.
+
+Shared actions revision `7507a26c009f3ec10ad25bc10f63e3c7cfa3099d` adds
+`MotionBinding.joint_names` (canonical-order site dependencies, including mimic leaders)
+and `correspondence_scale` over explicitly declared role chains. The example now holds
+only the complement of those dependencies at supplied reference values. Named knee/hip
+seed offsets and wrist/ankle terminal-roll holds are removed. A zero Jacobian at a
+singular pose does not freeze a coordinate. Support calculations reuse the existing
+geometry extent operation, without a Sentient mesh-only branch.
+
+The geometric solver accepts one actual observation for calibration. Training duration
+checks remain at the workflow/export boundary, so a static calibration cannot become a
+training motion. Tests cover a fixed-base mechanism and three branches, an unobserved
+branch, and complete renaming/reordering of joints, links, sites and source roles. These
+establish numerical invariance, not support for every articulation or physical dynamics.
+
+Remaining owning-layer gap: `sx_actions.whole_body` combines geometric fitting with
+executable action admission, while XMimic maintains an offline geometric implementation.
+Consolidation must separate the shared geometric problem/result from action admission,
+then make both consumers use it. Remove the duplicated geometric implementations when
+both consumers are served; keep frame journals and clip sequencing in XMimic. Do not
+fabricate actuator contracts, add a nominal bypass to command admission, or merely move
+the offline solver into another wrapper. Until that work and whole-motion qualification
+are complete, this fork is not qualified as a general embodiment training capability.

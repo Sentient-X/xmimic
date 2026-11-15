@@ -245,3 +245,125 @@ def test_frame_committed_before_tip_failure_is_recovered_without_recompute(tmp_p
     monkeypatch.setattr(PreparedTarget, 'poses', forbid_repeat)
     assert run(tmp_path/'run', monkeypatch).disposition.value == 'succeeded'
     assert json.loads((journal/'tip.json').read_bytes())['tip']['completed'] == 8
+
+
+def run_directions(directory, monkeypatch, *, kill=False):
+    from test_artifact_cache import identity
+    from test_retarget_target import inputs
+    from xmimic.retarget_target import Direction, IKConfig, TargetProfile, prepare_target, solve_sequence
+    directory.mkdir(exist_ok=True)
+    body = fixture_body(directory, monkeypatch)
+    profile = TargetProfile((), holds=(('q3', .3),), directions=(
+        Direction('shoulder', 'elbow', 'a', 'b'), Direction('elbow', 'hand', 'b', 'tip')))
+    target = prepare_target(body, profile, expected_embodiment_id=str(body.id))
+    args, q1, q2 = inputs()
+    yaw = np.linspace(-.3, .2, 8)
+    directions = {key: np.column_stack((np.cos(angle), np.sin(angle), np.zeros(8)))
+                  for key, angle in [('shoulder->elbow', q1+yaw), ('elbow->hand', q1+q2+yaw)]}
+    cache = ArtifactCache(directory/'cache')
+    with cache.entry(identity(), ['clip']) as entry:
+        journal = entry.frame_progress('clip', 'direction-job', total_frames=8, joint_count=3,
+                                       landmark_count=0, direction_count=2)
+        def committed(frame):
+            journal.append(frame)
+            if kill and frame.index == 2:
+                os._exit(47)
+        result = solve_sequence(target, {}, root_p=args['root_p'], root_quat=args['root_quat'],
+                                fps=30, initial_q=args['initial_q'], directions=directions,
+                                config=IKConfig(direction_tolerance_rad=1e-6),
+                                resume=journal.frames, on_frame=committed)
+        receipt = journal.checkpoint_receipt()
+    return result, receipt, cache
+
+
+def test_direction_only_process_kill_retains_angles_and_resumes_without_paid_prefix(tmp_path, monkeypatch):
+    from xmimic.retarget_progress import verify_progress_checkpoint
+    reference, _, _ = run_directions(tmp_path/'reference', monkeypatch)
+    interrupted = tmp_path/'interrupted'
+    program = '''
+import sys
+from pathlib import Path
+from pytest import MonkeyPatch
+from test_retarget_progress import run_directions
+with MonkeyPatch.context() as patch:
+    run_directions(Path(sys.argv[1]), patch, kill=True)
+'''
+    stopped = subprocess.run([sys.executable, '-c', program, str(interrupted)],
+                             env={**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)},
+                             capture_output=True, text=True, timeout=30)
+    assert stopped.returncode == 47, stopped.stderr
+    original = PreparedTarget.poses
+    def forbid_repeat(self, q, root_p, root_quat):
+        assert root_p[0] >= .1 + .2 * 3/7 - 1e-12, 'repeated a committed directional frame'
+        return original(self, q, root_p, root_quat)
+    with monkeypatch.context() as patch:
+        patch.setattr(PreparedTarget, 'poses', forbid_repeat)
+        resumed, receipt, cache = run_directions(interrupted, patch)
+    np.testing.assert_array_equal(resumed.q, reference.q)
+    np.testing.assert_array_equal(resumed.direction_residual_rad, reference.direction_residual_rad)
+    assert resumed.direction_residual_rad.shape == (8, 2)
+    assert receipt['schema'] == 'xmimic.retarget-checkpoint/v2' and receipt['direction_count'] == 2
+    verify_progress_checkpoint(cache, receipt, clip_id='clip', execution_ref='direction-job')
+    with pytest.raises(CacheError, match='shape'):
+        verify_progress_checkpoint(cache, {**receipt, 'direction_count': 1},
+                                   clip_id='clip', execution_ref='direction-job')
+
+
+def test_v1_native_journal_and_checkpoint_remain_readable_without_rewriting(tmp_path):
+    from test_artifact_cache import identity
+    from xmimic.artifact_cache import content_hash
+    from xmimic.retarget_progress import verify_progress_checkpoint
+    cache = ArtifactCache(tmp_path/'cache')
+    with cache.entry(identity(), ['clip']) as entry:
+        entry.start_clip('clip', 'old-job')
+        path = entry.path/('progress-'+content_hash({'clip_id': 'clip'}))
+        path.mkdir()
+        header = {'schema': 'xmimic.retarget-progress/v1',
+                  'binding': {'cache_key': identity().key, 'clip_id': 'clip', 'execution_ref': 'old-job'},
+                  'total_frames': 2, 'joint_count': 1, 'landmark_count': 1}
+        frame = {'index': 0, 'previous_sha256': content_hash(header), 'q': [.2],
+                 'position_residual_m': [.001], 'orientation_residual_rad': [0.],
+                 'iterations': 3, 'disposition': 'geometrically_feasible'}
+        tip = {'binding_sha256': content_hash(header), 'completed': 1, 'prefix_sha256': content_hash(frame)}
+        for name, payload in [('binding.json', header), ('frame-000000000.json', {'sha256': content_hash(frame), 'frame': frame}),
+                              ('tip.json', {'sha256': content_hash(tip), 'tip': tip})]:
+            (path/name).write_text(json.dumps(payload))
+        before = {p.name: p.read_bytes() for p in path.iterdir()}
+        journal = entry.frame_progress('clip', 'old-job', total_frames=2, joint_count=1, landmark_count=1)
+        assert journal.frames[0].direction_residual_rad.shape == (0,)
+        receipt = journal.checkpoint_receipt()
+        assert receipt['schema'] == 'xmimic.retarget-checkpoint/v1' and 'direction_count' not in receipt
+        with pytest.raises(CacheError, match='shape'):
+            entry.frame_progress('clip', 'old-job', total_frames=2, joint_count=1, landmark_count=1, direction_count=1)
+    verify_progress_checkpoint(cache, receipt, clip_id='clip', execution_ref='old-job')
+    assert {p.name: p.read_bytes() for p in path.iterdir()} == before
+
+
+@pytest.mark.parametrize('fault', ['missing_angles', 'missing_record_field', 'nonfinite', 'negative_count', 'bool_count'])
+def test_direction_journal_refuses_missing_or_invalid_evidence(tmp_path, fault):
+    from test_artifact_cache import identity
+    from xmimic.artifact_cache import content_hash
+    from xmimic.retarget_target import RetargetFrame, Disposition
+    cache = ArtifactCache(tmp_path/'cache')
+    with cache.entry(identity(), ['clip']) as entry:
+        if fault.endswith('count'):
+            with pytest.raises(CacheError, match='dimensions'):
+                entry.frame_progress('clip', 'job', total_frames=2, joint_count=1, landmark_count=0,
+                                     direction_count=-1 if fault == 'negative_count' else True)
+            return
+        journal = entry.frame_progress('clip', 'job', total_frames=2, joint_count=1, landmark_count=0, direction_count=1)
+        frame = RetargetFrame(0, np.array([.2]), np.array([]), np.array([]), 1, Disposition.GEOMETRICALLY_FEASIBLE,
+                              direction_residual_rad=np.array([] if fault == 'missing_angles' else [np.nan if fault == 'nonfinite' else .01]))
+        if fault != 'missing_record_field':
+            with pytest.raises(CacheError, match='numeric'):
+                journal.append(frame)
+            assert journal.frames == ()
+        else:
+            journal.append(frame)
+            record_path = journal.path/'frame-000000000.json'
+            payload = json.loads(record_path.read_bytes())
+            del payload['frame']['direction_residual_rad']
+            payload['sha256'] = content_hash(payload['frame'])
+            record_path.write_text(json.dumps(payload))
+            with pytest.raises(CacheError, match='Malformed retained frame'):
+                entry.frame_progress('clip', 'job', total_frames=2, joint_count=1, landmark_count=0, direction_count=1)

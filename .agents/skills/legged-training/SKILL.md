@@ -507,3 +507,634 @@ frames to turn a rejected reference into an accepted one.
 The bounded independent review reproduced all 400 physics steps exactly and injected
 a renderer failure: all 401 saved states and the diagnostic report survived. It found
 no remaining issue in this change's input binding, passive holds or evidence claims.
+
+### Use the existing URR boundary; test posture as well as endpoints
+
+The owner rejected the earlier599-frame endpoint-only retarget despite small wrist
+residuals. An independent anatomy audit found a0.38mm wrist error with77degrees of
+forearm-direction error. The old recipe used downstream moving yaw links as fixed
+anchors and omitted elbow/knee posture and chest motion. Never admit that cache from
+its narrow nominal `accepted` field; the private review receipt is
+`nominal-approved-ca3fb7/visual-fidelity-rejection.json`.
+
+Use `sx_actions.urr.Motion` through `xmimic.retarget_motion`, preserving complete source
+poses and explicit role correspondence, and `MotionBinding` for actual owner sites.
+No robot proportions belong in the source Motion. Each timestamp rounds
+`index * Fraction(frame_time_literal) * 1e9` independently; a repeatedly rounded
+period accumulates clock error. Missing orientation must remain missing rather than
+becoming identity. The retained shared source must have identical bytes/ID across
+body or proportion changes. Private source artifacts do not belong in git.
+
+Owner branch `codex/semantic-motion-sites` commit
+`ec1e7fd8248af8ce6ce54ffb2a7ddbc29d9c4ced` adds shoulders through the corrected shared
+arm modules and hips/knees/ankles through the leg modules. The humanoid has16sites;
+new identity is `eb249c00dcff12dc212db1e6122df0ea4f13d57f17fc90d4c4a8855051e036f5`.
+Removing only those8sites recovers exactca3fb7; URDF remains exacte7fd42 and all235
+asset files verified. Do not rewrite previous identities, receipts or hardware acceptance.
+Owner verification: `python -m pytest -q tests/test_sentient_pivot_sites.py
+ tests/test_humanoid_correction.py` →10passed with exact owner and compatible shared
+contracts/geometry packages. Exact owner snapshot and portable closure are retained in
+`data/bones_seed/nominal-approved-ca3fb7/semantic-sites-v1/`.
+
+```bash
+# PYTHONPATH must select the exact owner snapshot; do not sync the shared venv.
+JAX_PLATFORMS=cpu python -m pytest -q tests/test_retarget_motion.py \
+  tests/test_retarget_target.py tests/test_retarget_workflow.py \
+  tests/test_retarget_progress.py tests/test_retarget_quality.py \
+  tests/test_render_retarget.py tests/test_artifact_cache.py
+python -m examples.sentient_nominal --source SOURCE.bvh \
+  --embodiment-document semantic-sites-v1/embodiment.json --output NEW_PROFILE
+```
+
+Observed focused suite:102passed,5skipped. The skips concern the installed
+`sx_training` lacking `artifacts`; they are not hosted recovery proof. Real local
+process-kill tests did verify directional-frame resume with no committed frame solved
+twice. V1 checkpoints retain their bytes and cannot be reused for directional objectives.
+
+| Failure | Established cause | Fix / evidence limit |
+| --- | --- | --- |
+| Accurate wrists, visibly wrong arms | Endpoints do not determine elbow configuration | Fit owner-defined limb directions and retain angular residuals |
+| Missing generic anatomy | Approved body lacked shoulder/leg pivot sites | Add facts in shared owning modules; never infer sites from joint order |
+| Initial feet fight leg directions | Nonneutral source feet calibrated to neutral robot feet | Fit8directions+chest first, then bind hand/foot rotations to fitted world frames |
+| Static calibration stops before convergence | First frame hit60iterations; identical second frame converged after20more | Bound calibration at120iterations, keep the same5degree/.01rad limits; retain the failed attempt |
+| Direction-only nominal projection crashes | Reduction over empty landmark arrays | Represent absent maxima as null; still enforce the direction gate |
+| Direction result turns green from zero endpoint error | Unconstrained positions were interpreted as objectives | Mask them; separately display angular geometry and nominal quality |
+
+Local DLS can remain in an incorrect bend basin with weak direction weights; a planar
+ambiguity test needs explicit direction_weight1.0 while the generic default remains0.2.
+Do not silently widen acceptance tolerances. Entire-clip failures stay retained and
+unadmitted. First-pose calibration is not source cropping, flat-sole evidence, full-clip
+success, policy training or physical qualification. Renderer SITE endpoints include
+owner-defined local offsets transformed through actual MuJoCo link frames.
+
+Complete corrected-calibration run `urr-profile-v3` processed all599frames in193.14s:
+7frames meet geometric goals, maximum direction63.3445degrees, maximum orientation
+52.8958degrees. Direction, orientation and speed checks fail; the candidate is rejected.
+Median direction residual over all segments/frames is3.8571degrees, but that aggregate
+must not hide large forearm failures. Cacheff52de1370648023536bbdd239537c270a684af55a0ebc964536dbd4e150c15b,
+manifestb8d06cfdf17c1093ae01cd983caac01d9a191136cf3f14190f9d932d60935f21.
+Both calibration variants retain identical shared Motion67eae1b41100387589ecb5e24a9d9f4513639c1581637b2e715bbb3c861f45cd.
+The earlier neutral-foot variant passed0frames; its599frames remain separately retained.
+This run establishes shared representation/custody and honest rejection, not solved
+retargeting or training readiness. Next investigation is the constrained solver's remaining
+forearm fit, including limit saturation and orientation tradeoffs, without altering raw labels.
+
+### Generality audit: remove application-specific heuristics
+
+The owner explicitly requires generic algorithms; embodiment-name branches and special
+adjustments signal missing abstractions, even inside examples or JSON. First classify
+physical facts/source semantics/explicit experiment assumptions separately from inferred
+behavior. Preserve input declarations; fix the owning capability for the latter.
+
+Observed fixes: removed knee/hip substring seed offsets, finger-name hold selection,
+terminal wrist/foot name holds, Foot-suffix scale selection and mesh-only support math.
+Shared actions commit7507a26c (`sx` PR3579, stacked on PR3562) supplies
+`MotionBinding.joint_names` and `correspondence_scale`. Bound-site ancestry includes
+shared ancestors and off-path mimic leaders but excludes unrelated components. Hold its
+complement at the supplied reference state; never freeze coordinates because their
+initial Jacobian happens to be zero. Explicit corresponding polyline roles determine
+scale through one shared operation, invariant to independent rigid placement and without
+mutating source motion. The example consumes these capabilities instead of hiding the
+old conditions in a per-robot configuration.
+
+Single-sample geometric fitting now accepts the real first frame; no duplicate synthetic
+frame is needed. Source/training workflow and NPZ export still refuse a one-frame training
+motion. With exact source/owner/URR packages, the actual Sentient reference calibration
+passed at unchanged tolerances in42iterations, worst direction4.8262degrees, without
+named posture tweaks. Evidence is `nominal-approved-ca3fb7/generic-reference-v1/`.
+This is one calibration, not another whole-clip or trained-policy success.
+
+```bash
+JAX_PLATFORMS=cpu python -m pytest -q tests/test_retarget_generality.py \
+  tests/test_retarget_target.py tests/test_retarget_workflow.py \
+  tests/test_retarget_progress.py tests/test_retarget_quality.py \
+  tests/test_retarget_motion.py tests/test_artifact_cache.py tests/test_render_retarget.py
+```
+
+Observed106passed,5existing skipped managed-runtime tests (installed package lacks
+`sx_training.artifacts`). The new generality tests use actual owner bodies with one and
+three non-anatomically named branches and an unobserved branch. Renaming all joint/link/
+site/source-role/component identities and permuting native/URDF order preserves the
+physical solution to1e-10. Shared actions35tests passed; strict Pyright and Ruff passed.
+Its exact35-file source snapshot and commit/hash receipt live under
+`generic-reference-v1/dependencies`; do not repoint the shared venv. Isolated worktree
+was removed after verification, and no redundant CI or paid run was dispatched.
+
+| Failure | Cause | Owner/fix |
+| --- | --- | --- |
+| Example behavior depends on anatomical substrings | Missing dependency and reference-state abstraction | Shared MotionBinding ancestry plus supplied reference state |
+| Calibration invents a second frame | Tracker duration leaked into geometric fitting | Permit one geometric sample; preserve training-duration admission |
+| Generic claim despite duplicate coupled solvers | Shared action solver also requires executable action semantics | Separate shared geometric problem/result from action admission, then remove duplicate consumers' implementations |
+
+Do not claim the last owning-layer gap is resolved by these tests. Numeric generality,
+shared ownership, full motion fidelity and physical qualification are separate evidence.
+
+### Preserve absolute foot direction with physical point pairs
+
+The 2026-11-08 foot review found that first-pose-fitted foot orientation offsets
+could hide a wrong heading. The historical `urr-profile-v3` frame-zero orientation
+residual was near zero while physical foot-forward versus observed ankle-to-ball
+angles were110.50degrees left and98.26degrees right. Those different vectors are
+not the metric to use for a corrected ankle-to-toe comparison.
+
+Inspect literal owner CAD before changing frames. Both feet point toward local+X;
+there is no supporting evidence for a per-foot90/180degree correction. Source
+ankle-to-ball slopes downward, so treating it as horizontal sole-forward creates
+another mismatch. The owner added fixed `left_toe_edge`/`right_toe_edge` sites at
+literal40mm front sole-edge midpoints (zero distance to the edge) in shared leg
+modules, commit`aa3c97f421a961ff4ede1cb5518ece7e25efba78` (13tests pass).
+Body`1fb0d53b81fca5fcd8c09b00e796a31e08313fa2ea8bc22b4248dcb8b29eda3c`
+retains approved URDF`e7fd42a06794c5d3fce549e55630ea0a9194eee04411b7f06a9d7ed5ada87e67`;
+removing only the two new sites restores`eb249c`. No geometry, joint, limit or
+hardware acceptance changed.
+
+Use existing generic `Direction`: observed `Foot→ToeEnd` corresponds to physical
+ankle→toe-edge. Exclude feet from fitted orientation offsets. The obsolete
+`SiteAxis` prototype is retained in experiment history only; shared forward-revert
+`c3b1d5b63a8acf8a02b9bc478634f01d195518b8` restores the7507actions source tree.
+One point-pair direction does not determine full sole orientation, contact or slip.
+
+The viewer's `raw_direction_metrics` independently compares actual MuJoCo FK
+point-pairs to unchanged source pairs for every source frame, including frames
+omitted from display sampling. Gravity-plane heading is null when undefined.
+For before/after evidence use the same physical endpoints and observed source pair
+on both trajectories. A retrospective CAD-site measurement on an older body must
+record its original candidate identity separately from the reference semantic body
+and verify identical URDF geometry; never relabel or rewrite an old artifact.
+
+```bash
+# Exact toe-sites-v1/owner and compatible shared sources first on PYTHONPATH;
+# SX_EMBODIMENTS_ASSETS selects its verified asset closure. Do not sync the venv.
+python -m examples.sentient_nominal --source SOURCE.bvh \
+  --embodiment-document toe-sites-v1/embodiment.json --output NEW_PROFILE
+python -m pytest -q tests/test_retarget_direction_frames.py \
+  tests/test_retarget_generality.py tests/test_render_retarget.py
+```
+
+Observed at this stage:24tests pass. The first new calibration stopped after4steps
+with large residuals. Finite-difference diagnosis found a nonzero projected gradient
+(norm0.0988573): clipped unconstrained damped-least-squares steps all increased
+residual, while a feasible projected-gradient step reduced norm0.32032439→0.29104.
+Retain this rejected diagnostic; do not adjust named joint seeds or tolerance to
+hide an optimizer failure. Source vectors remain immutable, limits unchanged, and
+only complete accepted motion may proceed toward training admission.
+
+
+The projected-gradient correction now has a reachable planar regression:
+`python -m pytest -q tests/test_retarget_bounds.py`. Old code stopped immediately
+at `[2,-2,.3]` with2.666m error; the generic correction reaches independently known
+`[1.1,.6,.3]` within unchanged bounds/holds/tolerances. It fixes false stationarity,
+not global feasibility. No SciPy runtime dependency was added.
+
+New `toe-retarget-v2` calibration remains rejected after120iterations: toe errors
+1.54/1.66degrees, leg errors9.56–11.30degrees. The identical point-pair metric on
+old frame zero was107.36/94.05degrees; its full599-frame means were98.62/92.12degrees.
+Private `toe-comparison-v1/previous-candidate.json` binds both semantic body IDs,
+the common URDF and all599measurements. Do not call this a new full-clip success.
+Independent bounded least-squares diagnosis validates the analytic Jacobian to
+6.42e-11; two starts reach the same local leg/toe compromise, with both terminal
+ankle coordinates at±25degrees. One start converges in14evaluations with arms and
+chest nearzero, legs9.66–11.24degrees, toes1.26/1.34degrees. This separates slow
+optimization from a remaining local kinematic-fit limitation; it does not prove
+global infeasibility. The diagnostic, retained-state source hashes and script live
+under `foot-direction-audit/bounded-least-squares-diagnosis.json` and
+`bounded_least_squares_diagnosis.py`.
+
+Aggregate affected check:91passed,5skipped,32subtests across retarget source, Motion,
+target, generality, physical direction frames, bounds, workflow, progress, quality
+and viewer tests. Skips reflect the installed `sx_training.artifacts` dependency
+being absent; they are not hosted-training verification. No new full-clip motion,
+GPU execution or training admission was produced from rejected calibration.
+
+| Failure | Cause established by this run | Correction/boundary |
+| --- | --- | --- |
+| Small fitted foot-orientation error but wrong visible heading | Arbitrary first-pose offset redefined desired heading | Map observed source point-pair to physical canonical point-pair; independently audit raw directions |
+| New solve stopped after4iterations | Clipped unconstrained step was not a descent step despite nonzero projected gradient | Generic feasible gradient fallback; reachable independent regression |
+| Better toe direction with10–11degree leg errors | Two bounded local fits reach the same compromise with terminal ankle limits active | Preserve rejection and model-limit evidence; do not fabricate a training recipe, widen bounds or crop frames |
+
+
+The follow-up owner FK audit (`foot-frame-audit/leg-axis-audit.json`) found original
+and current leg axes and zero-pose FK identical. Knee/foot1 axes are perpendicular
+to physical foot-forward; foot2 is parallel, confirming terminal roll rather than
+a sideways knee. At the bounded optimum, native knees are−3.16/+3.97degrees while
+hip→knee→ankle point-pair bends are23.58/22.76degrees. Fixed link-origin offsets make
+those different quantities. Do not mistake physical pivot polylines for anatomical
+bone angles, infer a joint-axis repair from the residual, or claim global
+infeasibility. Correspondence semantics and geometric feasibility remain to resolve.
+The inspected source/calibration foot-detail visual and hash receipt are retained in
+`toe-comparison-v1/visualization-v2/`; all panels label both fitted poses REJECTED.
+
+### Assess PolicyIK plus model-based URR tracking before training
+
+Research inspection on2026-11-08, not an implemented or qualified recipe:
+- PolicyIK paper: https://arxiv.org/html/2611.05372v1 (Sections4,5.2, AppendixJ).
+- Released implementation: https://github.com/Tinaliu0123/PolicyIK
+  `simulation/policyik_sim/tasks/actions.py` and `env_cfg.py`.
+- SuperMimic method and benchmark limits: https://supermimic.github.io/.
+
+PolicyIK accumulates joint references, observes reference-minus-measured joints,
+uses coarse/fine pose error and error-dependent action scale, and rewards progress
+and holding. Simulation uses PPO; physical OpenArm uses FlashSAC/HER. AppendixJ
+explicitly trains separate xArm7 policies: evidence for a reusable formulation,
+not one checkpoint transferring unchanged across morphologies. Hardware pose
+errors use encoder FK, not independent external metrology. The98.9percent simulated
+figure includes a deployment protocol;93.5percent is single-attempt. Neither is a
+full-body walking or arbitrary-embodiment guarantee.
+
+Read local boundaries before describing this as a configuration change:
+```bash
+rg -n 'floating root|floating-root' xmimic/model.py
+rg -n 'GOAL_Q_OFFSET|self.q\[fut\]|root_p|joint_names' xmimic/motion.py
+rg -n 'def _anchored_ref|def reward|def termination' xmimic/mdp.py
+sed -n '1,135p' ../glued/packages/sx-actions/sx_actions/urr.py
+```
+Observed: model loader requires one floating root; motion goals carry native q/qd;
+tracking rewards use yaw/translation anchoring and root height/tilt termination.
+URR Motion already owns sparse named Position/Pose samples, frames and time, with
+missing observations preserved. Thus direct URR fixed/mobile tracking needs an
+explicit task/state/controller boundary refactor, not a pretend floating joint or
+synthetic missing-foot targets.
+
+Proposed experiment: same URR goal contract, per-embodiment trained controllers,
+robot-owned mounts/base mobility/limits/sites; compare bounded numerical IK,
+PolicyIK-style model-free RL and the same task trained with XMimic's learned
+world model. Sample reachable configurations and compute canonical FK goals before
+adding UMI or BONES-SEED trajectory curricula. Observed source poses remain immutable;
+role/site selection and feasible task priorities are separate from source identity.
+Missing orientation is not zero, one direction is not full foot orientation, and
+human pivot geometry is not automatically a homologous robot bone frame.
+
+A learned dynamics model must condition on accumulated reference as well as measured
+state; otherwise identical state/action can produce different transitions. Retain
+analytic canonical FK for pose rewards rather than relearning known kinematics.
+Adapt static-goal progress/holding rewards for moving references, and ensure any
+near-goal action scaling cannot suppress unrelated balance corrections. Use smooth
+precision losses for imagined gradient updates and exact tolerance/contact checks
+for evaluation. These are design hypotheses, not adopted implementation choices.
+
+Stop short of a universal-checkpoint or millimetre physical claim without held-out
+embodiment tests, tracking/holding errors, delay/disturbance/contact/constraint
+measurements and external pose metrology. A world model's broad motion reward or
+low average prediction loss does not establish sub-millimetre tracking fidelity.
+The current foot-calibration failures remain rejected; learning must not erase them.
+
+### Preserve baseline behavior when combining training recipes
+
+The owner made comparative experiments an explicit requirement on2026-11-08:
+vanilla XMimic, vanilla PolicyIK and the combined recipe must remain separately
+measurable. The intended output is precise URR execution of UMI, teleoperation and
+BONES-SEED trajectories, including gripper/hand pose and measured gripper aperture.
+Read [the benchmark plan](../../../docs/urr-controller-benchmarks.md) before changing
+the controller/training boundary. It is a specification; its evaluator and paired
+training runs are not yet implemented or executed.
+
+Native reproduction and matched-task adaptation answer different questions. A
+PolicyIK-derived controller ported to another simulator/body is not vanilla PolicyIK;
+an XMimic-derived fixed-base URR controller is not vanilla XMimic. Retain upstream
+protocols first, then label and control adaptations. Preserve seed/task/split pairing,
+predeclare metrics and practical non-inferiority margins, and report inconclusive
+intervals explicitly. Never infer no regression from higher aggregate reward or
+one favorable seed. Evaluate each required capability and absolute task acceptance.
+
+Useful current boundary checks:
+```bash
+rg -n 'def observed_frame|apertures|def select' ../glued/packages/sx-actions/sx_actions/urr.py
+rg -n 'floating root|floating-root' xmimic/model.py
+rg -n 'GOAL_Q_OFFSET|self.q\[fut\]' xmimic/motion.py
+git diff --check
+```
+Observed: shared URR already carries metric apertures and explicitly framed pose
+observations through `observed_frame`. This is not an episode importer or closed-loop
+aperture-policy qualification. Current XMimic still uses a floating-root/native-joint
+reference boundary. Keep missing aperture distinct from zero and teleoperator commands
+distinct from measured motion; joint-only source episodes need their own canonical FK.
+
+| Failure/signature | Cause or uncertainty | Required evidence/correction |
+| --- | --- | --- |
+| Combined recipe appears better because original methods were weakened | Adapted methods mislabeled as native or unequal tasks/budgets | Native reproduction plus labelled matched comparisons and component experiments |
+| Visually improved human retarget still reports10–11degree leg errors | Anatomical/pivot correspondence includes fixed offsets; not measured control error | Separate known-feasible robot tracking from source correspondence, then measure full physical task constraints |
+| Accurate hand target while gripper response/balance regresses | Aggregated reward hides coupled objectives | Per-role pose/aperture/contact/temporal metrics and all required promotion criteria |
+
+The current failed human cache stays unadmitted. Known-feasible synthetic and measured
+robot trajectories can establish baselines while correspondence is unresolved. No
+paid training, new tolerance acceptance or physical motion was performed by writing
+this plan. Stop short of claiming benchmark enforcement until the evaluator executes
+the frozen protocol and retains its complete results.
+
+### Execute stationary pose/aperture comparisons and native controls
+
+The owner explicitly requested the runner and real baseline execution on2026-11-08.
+Use [stationary results/commands](../../../docs/stationary-benchmark-results.md),
+[the experimental contract](../../../docs/urr-controller-benchmarks.md) and
+[native protocols](../../../docs/native-baselines.md). CPU adaptations and native
+reproductions are separately labelled. A completed pilot is not converged training.
+
+Owner83f32c4 adds fixed-base, prismatic and explicit affine-dependent projection to
+the existing exporter. Dual PiPER fixture0c19cd156a9e6010a40cc5d6ba24755351ac43cb6893c785bf80d5a3b097df48
+uses12arm coordinates and2metric gripper drives, plus2source mimic followers.
+Hand sites/aperture law come from canonical parts; Y+/-0.35m mounting and PD settings
+are explicit nominal assumptions. Sentient aperture is undocumented; ALOHA's native
+slide range/mimic disagrees with its URDF. Exclude those unsupported aperture cases
+rather than inventing facts. Conservative PiPER native limit rounding is a subset
+of source bounds; export the native subset, refuse extensions. Owner15tests,
+strictPyright0errors and the real all-link FK/aperture test pass. Constant PD shows
+16.029mm/3.338degree gravity sag; exact geometric FK still agrees to1.6e-16m.
+
+First complete scalar screening:13cells,3seeds for each learned method,20updates
+of128real transitions per seed,8common evaluation goals,5s/goal and final1s continuous
+holding. Both hands must satisfy1mm/0.2degree and both apertures1mm. DLS held8/8;
+all learned adaptations0/24 each. PrecisionPPO had19/24 and combined14/24 recorded
+constraint-failure tasks. Total166.78sCPU. This rejects promotion of that pilot;
+it does not prove the research combination cannot converge. Retain old source,
+checkpoints and measured native states before every correction. The measured replay
+uses visual group1, not collision group0; targets display URR frames rather than
+invented target joints. Aperture readings are owner-law-derived proprioceptive
+values, not independent external jaw metrology or grasp-success evidence.
+
+Whole-observation WM prediction gave a network authority over known goals/error
+channels. Structured revision3f3e089 learns q/qd only, deriving commands, FK, aperture,
+precision and history. Extend existing Kinematics (hinge/slide/affine-dependent,
+anchors/reference offsets), never create another embodiment-specific FK. Legacy
+metadata outputs remain bitwise equal. Actual PiPER reconstruction discrepancy
+<=2.21e-6, aperture<=5.6e-9m, discarded known-channel gradients0. Existing rotation
+log gained optional safe_zero handling; default vanilla arithmetic is unchanged.
+Moving structured training refuses missing trajectory state; moving feedback eval
+has separate timing criteria. Evaluation seeds0–7 are development evaluation;
+10000–10063 are reserved for final confirmation before tuning.
+
+Scalar collection548transitions/s was the next measured blocker. Revision7e1e34a
+shares immutable MjModel with separate MjData/RNG/goals per lane and a bounded8-thread
+physics pool; batched known observation/reward math yielded16,102transitions/s
+(29.38x), warnings0. Complete10-update64x32 training measured3,507/sPPO and2,199/s
+combinedWM, including JIT, optimizer updates and durable checkpoints. Collection-only
+speed is not full training throughput. T-by-N GAE handles each lane's terminal before
+flattening; replay/step counts includeN. Complete integration/RNG/command/goal/reset
+state resumes exactly.27focused tests pass. `LearningConfig(num_envs=64)` is an
+execution parameter; fixed bodies/simulator semantics and task thresholds stay equal.
+
+```bash
+python tools/benchmark_urr_vector.py --prepared PREPARED --output NEW.json --num-envs 64 --steps 128
+python tools/benchmark_urr.py --prepared PREPARED --output NEW_RUN \
+  --methods dls ppo_coarse ppo world_model combined --seeds 0 1 2 \
+  --num-envs 64 --iterations 500 --rollout-steps 32 --episode-steps 250 --hold-steps 50
+python -m pytest -q tests/test_kin_scalar.py tests/test_urr_vector.py \
+  tests/test_urr_benchmark.py tests/test_urr_learning.py tests/test_stationary_benchmark.py
+```
+
+The native worker only runs pinned upstream source/tasks/checkpoints via managed
+Jobs, preserving TRAINING versus EVALUATION(false) purpose. PolicyIK needs its native
+Python3.11/IsaacSim5.1/IsaacLab2.3.2/RTX stack; H100/A100 lack required RT support.
+XMimic native uses H100/CUDA12 and its40checksum-boundG1/LAFAN motions (75files,
+110,153,716bytes), exclusively the native control, never Sentient retargeting.
+Native acquisition/imports/unit tests are not native scores. Real worker validation
+must call actual `TrainingContext.execute` and verify its owner receipt before a
+paid launch; worker must return exactly run_dir/artifact. Publication uses existing
+CatalogPublisher, private EVALUATION/false evidence, verified archive inventories
+and readback; no parallel R2 or Modal launcher.
+
+| Observed failure | Cause | Correction |
+| --- | --- | --- |
+| Returned pose lags current qpos by1.6–1.8mm | mj_step integrates after last position stage | mj_forward before measuring returned state; canonical FK consistency regression |
+| Exact-target precision gradient NaN | Euclidean/SO3 norm undefined derivative at zero | Safe zero subgradient with exact norm values; partial/exact-zero tests |
+| Copied task result silently reused | Task lacked its request/policy identity | Bind/verify per-task request hash, seed and sample count |
+| Tiny unit mechanism autorestes numerically | High damping on tiny fixture inertia | Explicit fixture armature and no-warning assertions; no PiPER gain adjustment |
+| Successful paid child rejected at framework boundary | Returned native-output instead of managed artifact root | Actual owner execute/receipt test plus atomic complete output publication |
+| Cancelled child leaves grandchild | Waiting only for leader exit | Kill/reap entire process group, including SIGTERM-ignoring descendants |
+| Extra source/output or symlink accepted | Incomplete inventories/path validation | Exact declared source/output closure and regular in-root paths |
+| Publication cannot resume after fsync/link fault | Unidentified staging temp blocked strict inventory | Temp identity binds destination+digest; reconcile only known exact bytes; forbid paid child rerun in regression |
+
+Preconditions: immutable body/runtime/task/source pins, true measured-transition
+collection, disjoint train/development/final identities, bounded managed spend.
+Stop on physics warnings, unsupported mobility/joints/aperture law or failed owner
+admission. Do not tune thresholds after seeing scores, admit failed human retargets,
+claim native scores from CPU adaptations, or count cached source acquisition as a
+completed GPU baseline. Update actual native receipts separately when they exist.
+
+### Audit reward fidelity before extending a matched cohort
+
+On 2026-11-08 the `vector-million-v1` cohort was interrupted after a counterexample
+in the adaptation's objective, not because upstream PolicyIK or XMimic had been
+shown to fail. Preserve its source checkout `bcae2a6`, request and all numeric
+checkpoints. Coverage: DLS8/8; coarse PPO, precision PPO and coarse WM each completed
+three seeds at500updates and held0/24; combined seed0 completed and held3/8, seed1
+stopped at checkpoint232, seed2 was not run. This is **not a complete cohort**.
+Combined seed0 terminal medians0.425/0.352mm and0.153/0.111degrees are useful partial
+evidence, but its worst second-hand position8.316mm and orientation1.917degrees
+miss strict holding. Do not suppress that positive result or turn it into a
+non-regression/promotion claim. Exact paths are in
+`data/stationary-benchmark/vector-million-v1-interruption.json`.
+
+The frozen scalar-coordinate Gaussian mean rewarded sacrificing one axis:
+(20,20,0)mm→(35,0,0)mm increases Euclidean error28.284→35mm while precision reward
+rises0.859759→0.928572 with other terms equal. It also depends on world-axis choice.
+The TRAIN-only audit replays4096transitions from three seed0/update500 cells,
+verifies checkpoint leaves and recomputes recorded reward within1.8e-7. All scalar
+position errors>=5cm had objective derivatives<1e-6/m. Full native-q gradients were
+not zero; these are not measured PPO optimizer gradients. The helper does not
+step physics, optimize, or read evaluation transitions.
+
+```bash
+# Preconditions: persistent owner83f32c4 and exact compatible sx-actions,
+# sx-geometry/sx-contracts on PYTHONPATH; the frozen checkout still retained.
+python data/stationary-benchmark/objective-audit-v1/audit.py
+python -m pytest -q tests/test_urr_reward.py tests/test_urr_benchmark.py \
+  tests/test_urr_vector.py tests/test_urr_learning.py
+```
+
+The audit helper prepends the historical checkout and verifies its source hashes,
+so newer core code cannot silently change the audit. `results.json`, `REPORT.md`
+and `reproduction.log` record actual outputs and source links. Review actual pinned
+PolicyIK22f3a5c `tasks/env_cfg.py`, `mdp.py`, `actions.py` plus inherited OpenArm
+bad82e23 terms and IsaacLab2.3.2 dt integration; an observation scale is not a
+reward width. Native XMimic8f7693f uses whole-body vector tracking, model rollout
+losses, critic/bootstrap/termination and optimization machinery absent here.
+
+Source-term correction `cd3eb346da11388ed26d5feaceacc9628fa7bd97` passed37focused
+checks. It uses Euclidean position and three centred45cm virtual keypoints, literal
+source weights/widths, transition-based precision shaping with first/changed-goal
+reset, exact source gain ramps, native-normalized margin cost and control-dt scaling.
+The aperture position pair and global multi-role ratio are documented extensions;
+no source-native gripper reward is invented. Existing normalized action-rate cost
+remains; do not copy radian velocity costs onto metre-valued slides. World-frame
+observation features, native action scales/governor and small learner architecture
+remain labelled adaptations. Neither numerical source agreement nor tests prove a
+learning gain. The subsequent zero-aperture follow-up replaces scalar abs by the
+safe scalar norm in reward/ratio and tests exact-zero gradients plus two-sided
+descent through affine/curved owner laws. Follow-up455390a passed37focused tests.
+TRAIN-only `reward-pilot-v3` completed all four adaptations at10updates×64×32,
+20,480real transitions each, with finite recorded objectives/losses and no evaluation.
+The separately authorized `vector-million-reward-v3` completed from frozen455390a
+in1728.653s, same500update/three-seed budget and held thresholds. DLS8/8 constraint0;
+coarsePPO0/24 constraint24; precisionPPO15/24 constraint0; coarseWM0/24 constraint0;
+combined12/24 constraint0. Report `do_not_promote`: combined-minus-precisionPPO held
+failure+.125, mean per-task terminal-p95 position left+.400mm/right−.323mm. These
+mixed descriptive paired results do not establish non-regression, native baseline
+performance, convergence or physical qualification. All104development tasks and
+12final complete learned checkpoints remain recorded; final seeds stay reserved.
+Replays `vector-million-reward-v3-precision-replay` (DLS/precisionPPO) and
+`vector-million-reward-v3-comparison-replay` (precisionPPO/combined) each show only
+training-seed0/task0. Never generalize that single video into the cohort result.
+
+A new objective requires a new frozen code/request/run. Never change old evaluation
+bytes, widen thresholds, tune weights on development scores while calling them
+source-derived, resume old checkpoints under altered semantics, or infer native
+failure from an adapter. A short TRAIN-only stability pilot precedes any newly
+approved cohort; it is not permission to run another full cohort automatically.
+Strict per-role continuous acceptance remains authoritative even when reward rises.
+
+| Observed failure | Cause | Correction / stop condition |
+| --- | --- | --- |
+| Reward rises while Euclidean pose worsens | Mean of narrow scalar-axis kernels rewards sacrificing coordinates | Literal source vector/keypoint terms; common-frame invariance and analytic counterexample regression |
+| Far positional error gets negligible direct reward slope |1cm observation scale was reused as tracking kernel width | Source negative distance and .20/.05m keypoint kernels; inspect TRAIN replay gradients without claiming PPO gradient collapse |
+| Precision progress/dwell differs from source | Linear best-ratio improvement and growing dwell were substitutes | Exact utility/potential/backslide/binary dwell with explicit transition/reset state |
+| Exact-goal aperture gradient pushes away from target | JAX scalar abs chooses a nonzero derivative at zero | Safe scalar norm with exact-zero and positive/negative error regressions |
+| Single successful combined seed becomes a whole-cohort claim | Partial cohort coverage and worst-role errors hidden by medians | Retain every cell status, worst errors and unchanged held-pose rule; incomplete remains inconclusive |
+
+### Preserve completed screening evidence through Catalog
+
+Verified first screening pack:
+`xmimic.benchmarks.stationary.screening-v1.ec27776bf3b8`, project
+`b98ba48a-39c1-4346-98a4-d9c130144a42`, manifest
+`69663086f02ba41de14c2b87e740c33bef7916a8f1dcc77e05454e8151898e47`.
+Complete readback verified8objects/54,948,901bytes covering1,937logical files:
+prepared body/assets, all task/training results, latest complete recovery checkpoint
+per learned cell, whole historical checkout, owner source/licenses and measured v3
+visuals. This receipt covers the **first screening only**, not the interrupted
+million-transition cohort. All older local checkpoints remain intact.
+
+`tools/publish_urr_benchmark.py` uses existing CatalogPublisher.publish_files and
+restore_pack. The actual receipt is
+`data/stationary-benchmark/screening-v1-catalog/publication-receipt.json`;
+transport/publication.json retains the upload/registration operation identities.
+Manifest purpose EVALUATION and training_eligible=false are mandatory; evidence
+publication is not Catalog learning admission. No direct R2 SDK or new bucket.
+
+Reproducing publication needs the merged sx_training ArtifactPurpose.EVALUATION
+owner and existing approved private-project credentials. Never print credentials.
+Use a fresh derived preparation directory for new evidence; attach the original
+journal for the same immutable evidence. Stop on changed hashes, incomplete cells,
+manifest-purpose mismatch, unknown service outcome or archive larger than1GiB;
+shard explicitly before any new publication. Preserve licensed source and exact
+logical archive inventories, including empty source files. Verify readback before
+claiming durable evidence. This procedure does not authorize a new training run.
+
+Publisher correction278b63f was independently checked against the two reproduced
+preservation failures. Its13tests passed; separate probes rejected missing cells,
+broken request/result links, changed assets and owner URDF before archiving,
+preserved a competing destination byte-for-byte, and recovered exact staging bytes
+from interruptions both before and after a successful hard-link seal. No network
+publication was performed by this correction review. Evidence is retained under
+`data/stationary-benchmark/publisher-review-v1/{probe.py,results.log,correction.py,correction.log}`.
+
+```bash
+# Requires the merged sx_training.artifacts owner on PYTHONPATH.
+python -m pytest -q tests/test_publish_urr_benchmark.py
+```
+
+| Publisher failure | Proven cause | Corrected behavior |
+| --- | --- | --- |
+| Incomplete or changed screening accepted as complete | Trusted complete=true and supplied cells without validating linked receipts and prepared asset closure | Verify request/result/report hashes, exact requested cells, executed source hashes, prepared scene/owner/assets and evaluation task identities/counts before archiving |
+| Concurrent destination replaced while sealing an archive | Existence check followed by overwriting rename | Atomic no-clobber hard link; verify a competing destination and preserve it on mismatch; reverify known complete staging bytes before recovery |
+
+A corrupt or unknown staging file remains a refusal, not permission to overwrite
+retained evidence. Archive verification and successful local correction do not
+mint training admission or substitute for Catalog readback of a newly published pack.
+
+
+Publisher inventory v2 removes historical-folder assumptions. The full checked
+`checkout/` is canonical; `source/` is optional supplementary evidence. Supply
+recorded replay directories explicitly (repeat --visual-review for multiple views):
+
+```bash
+python tools/publish_urr_benchmark.py --screening COMPLETED_RUN --prepared PREPARED \
+  --owner EXACT_OWNER_ARCHIVE --visual-review PRECISION_REPLAY \
+  --visual-review COMPARISON_REPLAY --output NEW_PUBLICATION_DIRECTORY \
+  --project PROJECT --pack NEW_PRIVATE_EVIDENCE_PACK
+```
+
+Without --publish this only prepares local archives; it grants no network write or
+training admission. The visual archive has canonical group `visual-review`, retains
+each source directory's name and bytes, and rejects duplicate names or replay
+body/scene/task receipts outside the completed run. Inventory records publisher
+SHA-256; Catalog generator provenance carries that same identity. The initial v1
+pack stays readable through its existing manifest/readback; do not rewrite it to
+v2 or use its directory for new preparation.19focused publisher tests passed with
+an exact archived owning `sx-training`/`sx-contracts` atf0607b1. The removed worktree's
+PYTHONPATH failed because the installed SDK predates artifacts; use the retained
+`data/native-baselines/runtime-owner-f0607b1/packages/` roots and source-receipt.json
+instead of changing the shared environment. No new cohort archive or publication
+was created during this implementation/test pass.
+
+After bounded review of41d7022, actual local preparation of the completed corrected
+cohort produced `data/stationary-benchmark/vector-million-reward-v3-catalog/`:
+8objects/72,138,011bytes,6archives/1,960logical files,12complete final checkpoints
+and10members from both replay directories. Manifest
+`eb3187da1c57fd2c5e9052467f864bf82d3781fe241ceca61a1f2ba0e635f199` is EVALUATION/false.
+Independent manifest/object/archive verification passed;9first-screening publication
+files remained byte-identical. `vector-million-reward-v3-preparation.json` records
+all hashes and totals. This stage established local preparation only; publication
+and readback were separately executed afterwards.
+
+The authenticated publisher then uploaded and fully restored all8objects through
+Catalog, verifying all6archive inventories/1,960logical files. Private pack:
+`xmimic.benchmarks.stationary.vector-million-reward-v3.455390a5`; manifest is the
+same `eb3187da…635f199` above,72,138,011bytes. The final
+`vector-million-reward-v3-catalog/publication-receipt.json` has
+`verified_readback=true`, purpose EVALUATION and `training_eligible=false`.
+Use the same command with `--publish` and existing project authentication; never
+discard its durable `transport/publication.json` to retry accepted work. The slow
+laptop readback completed without a second publication or alternate R2 transport.
+Private storage of the do_not_promote result establishes evidence custody, not
+policy acceptance, native upstream scores or permission to train on evaluation.
+
+First native managed Job `ftjob_4c0c0bece5664eedb6eae8f3c922c496` was accepted
+2026-11-08T16:33:57Z ($8/3600s), then failed before the upstream child/optimizer.
+The SDK rejected a symlink ancestor of the artifact directory; no precise live
+symlink target was observable after termination. Sanitized Temporal history proves
+launch heartbeat timeout120s; the old dispatcher also bought3 bootstrap recovery
+generations without a checkpointed-interruption acknowledgement. Public Watch
+straddled the terminal transition and refused an inconsistent failure snapshot;
+the database's failure itself was complete. These are platform execution failures,
+not native learning scores. Preserve attempt/provider/cost evidence under
+`runtime-grants-rollout-v1`, fix the complete owner boundary set, rebuild immutable
+images, verify exact grants and serving source, then make a separately bound
+corrected attempt. Never retry an ambiguous native paid child or treat acquisition,
+image publication or an accepted Job as completed training.
+
+### Native runtime qualification after the first launch failure
+
+Corrected CPU/CUDA publication 42506620271 passed the actual installed SDK proof
+through provider-aliased data/cache/exact Job mounts. Before the changed native
+attempt, live check `runtime-correction-v2/serving-20261108T191832Z.json` verified
+all 11 owner module hashes in both ready roles, exact immutable runtime grants,
+schema 0019 and authenticated Catalog ReadAsset. Source `217b321b`/API `6200697` was
+serving; a grant-module-only check would not have qualified the launcher repairs.
+Fresh failed-Job containment was empty. Corrected Job `73935460` was then accepted
+once at 19:19:20 UTC, preserving original 3500/seed 1/H100/$8/3600 semantics and a
+distinct durable idempotency key. Its recent heartbeat/attempt 1/recovery 0 evidence
+crossed the old 120s failure boundary while placement remained pending. Do not turn
+RUNNING, successful staging or heartbeat liveness into a GPU/training claim.
+
+| Native runtime failure | Proven cause | Owner correction and evidence |
+| --- | --- | --- |
+| Editable install cannot import Poetry; manually listed source dependencies disagree | Pinned rl-games pyproject owns the backend and dependencies, superseding legacy setup.py | Prepare all 6 actual editable METADATA using 7 hash-locked backend packages; select Linux markers; resolve 161 native dependencies under complete untouched vendor constraints; regenerate/compare metadata inside the Linux image before installation |
+| Image pushes successfully but publication fails required metadata | Authored Dockerfile retained incomplete base labels; Bake supplied only title/description | Shared generator supplies vendor/source/inventory-license labels for every built target; exact mirrors remain unchanged. Independent comparison found only 3 label additions across 31 targets; 13 focused metadata/authored tests passed |
+| A metadata correction appears to require another expensive native build | Publication failed after complete immutable layers had already been pushed | Preserve BuildKit/registry state. Changed publication 42515309040 reused successful42511520865 native/SDK proof layers; layer push 11.8s versus 1,315.7s initially; complete publication step 44.641s |
+
+The final private PolicyIK runtime is
+`registry.sentientx.io/sx/cloud/sx-policyik-runtime@sha256:d59c2c61396d22387a1a5aeb5789eb92509aabbaf654c60dda165db4ebe6201c`,
+source `e353302380`. Actual registry metadata readback passed; 167 installed native
+distributions and the supervisor mount/artifact checks passed. Evidence is
+`runtime-metadata/policyik-pep517-v1/{candidate-result.json,publication-result.json}`.
+The full logs, locked metadata and source/backend receipts remain beside them.
+The earlier `d4f` digest remains failed-publication evidence and must not be granted.
+
+Preconditions for the next paid command: final verified immutable image, exact
+project grant serving with the reviewed launcher code, EVALUATION/false input pack,
+original released-checkpoint deployment protocol, L40S and explicit spend/deadline.
+Prepare seeds 1/2/3 independently and run evaluate_deployment directly, retaining its
+single/corrected/eight transient outputs rather than paying for single twice.
+Stop at ambiguous child intent, changed source/output identity or a new failure;
+preserve paid work and change the proven cause before a new attempt. Installation,
+cached publication and lock-only security scans establish neither GPU simulation
+nor native scores, production promotion or physical robot permission.

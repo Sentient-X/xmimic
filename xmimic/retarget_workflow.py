@@ -17,13 +17,17 @@ import tempfile
 import numpy as np
 from sx_contracts.identity import canonical_json
 from sx_geometry import mat_to_quat
+from sx_actions import urr
+from sx_actions.urr import motion_to_dict
+
+from .retarget_motion import motion_from_clip, motion_positions, motion_orientations, motion_directions
 
 from .artifact_cache import ArtifactCache, CacheIdentity, ClipDisposition, content_hash
 from .retarget_source import CONVERTER_VERSION, parse_soma_bvh
 from .retarget_target import IKConfig, TargetProfile, prepare_target, solve_sequence
 from .retarget_quality import NominalQuality, qualify_motion
 from .embodiment_bundle import verify_nominal_receipt
-from . import retarget_source, retarget_target, retarget_progress
+from . import retarget_source, retarget_target, retarget_progress, retarget_motion
 
 
 @dataclass(frozen=True)
@@ -97,8 +101,8 @@ class RetargetRecipe:
                 raise ValueError("Recipe contains duplicate names")
         scaled = set(dict(self.landmark_scales))
         segmented = {t.source for t in self.segment_targets}
-        if scaled & segmented or scaled | segmented != {m.source for m in self.target.landmarks}:
-            raise ValueError("Each landmark needs exactly one scalar or segment proportion mapping")
+        if scaled & segmented or scaled | segmented != {m.source for m in self.target.landmarks if m.position}:
+            raise ValueError("Each positional landmark needs exactly one scalar or segment proportion mapping")
         if not all(math.isfinite(v) and v > 0 for _, v in self.landmark_scales):
             raise ValueError("Landmark scales must be positive and finite")
         if set(dict(self.orientation_offsets)) != {m.source for m in self.target.landmarks if m.orientation}:
@@ -165,6 +169,8 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         "target": hashlib.sha256(Path(retarget_target.__file__).read_bytes()).hexdigest(),
         "workflow": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "progress": hashlib.sha256(Path(retarget_progress.__file__).read_bytes()).hexdigest(),
+        "motion_adapter": hashlib.sha256(Path(retarget_motion.__file__).read_bytes()).hexdigest(),
+        "urr": hashlib.sha256(Path(urr.__file__).read_bytes()).hexdigest(),
         "numpy": np.__version__, "converter": CONVERTER_VERSION,
         "quality": hashlib.sha256(Path(__file__).with_name("retarget_quality.py").read_bytes()).hexdigest(),
         "nominal_scene": nominal_scene,
@@ -180,31 +186,39 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         clip = parse_soma_bvh(source, world_from_source=recipe.world_from_source)
         if clip.frame_count < 2 or (clip.frame_count - 1) * clip.frame_time_s < .02:
             raise ValueError("Source clip must span at least one 50 Hz control step")
-        root_index = clip.joint_index(recipe.source_root)
-        human_p = clip.world_positions[:, root_index]
-        human_R = clip.world_rotations[:, root_index]
+        # Preserve the complete observed source vocabulary. Role spelling is
+        # explicit identity correspondence, never inferred robot anatomy.
+        source_roles = {name: name for name in clip.joint_names}
+        motion = motion_from_clip(clip, roles=source_roles, frame='soma_world', start_time_ns=0)
+        points = motion_positions(motion, tuple(source_roles))
+        rotations = motion_orientations(motion, tuple(source_roles))
+        human_p = points[recipe.source_root]
+        human_R = rotations[recipe.source_root]
         origin = human_p * recipe.root_translation_scale
         root_p = origin + np.einsum("tij,j->ti", human_R, recipe.root_offset_m)
         root_R = human_R @ _rotation(recipe.source_root_from_robot_root)
         root_q = np.asarray([mat_to_quat(rotation) for rotation in root_R])
-        positions = {name: origin + scale * (clip.world_positions[:, clip.joint_index(name)] - human_p)
+        positions = {name: origin + scale * (points[name] - human_p)
                      for name, scale in recipe.landmark_scales}
         for mapping in recipe.segment_targets:
             point = root_p + np.einsum('tij,j->ti', root_R, mapping.root_anchor_m)
             for parent, child, length in mapping.segments:
-                vector = clip.world_positions[:,clip.joint_index(child)] - clip.world_positions[:,clip.joint_index(parent)]
+                vector = points[child] - points[parent]
                 norm = np.linalg.norm(vector, axis=-1, keepdims=True)
                 if np.any(norm < 1e-10):
                     raise ValueError('Cannot normalize a zero-length source segment')
                 point = point + length * vector / norm
             positions[mapping.source] = point
-        orientations = {name: clip.world_rotations[:, clip.joint_index(name)] @ _rotation(offset)
+        directions = motion_directions(motion, {
+            mapping.key: (mapping.source_parent, mapping.source_child) for mapping in recipe.target.directions})
+        orientations = {name: rotations[name] @ _rotation(offset)
                         for name, offset in recipe.orientation_offsets}
         if not all(np.isfinite(a).all() for a in (root_p, root_R, *positions.values(), *orientations.values())):
             raise ValueError("Recipe scales overflowed source geometry")
         journal = entry.frame_progress(clip_id, execution_ref, total_frames=clip.frame_count,
                                        joint_count=len(target.binding.joint_names),
-                                       landmark_count=len(target.binding.profile.landmarks))
+                                       landmark_count=len(target.binding.profile.landmarks),
+                                       direction_count=len(target.binding.profile.directions))
         if on_checkpoint is not None:
             on_checkpoint(journal.checkpoint_receipt())
         def committed(frame):
@@ -215,7 +229,7 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
                 on_progress(frame.index + 1, clip.frame_count)
         sequence = solve_sequence(target, positions, root_p=root_p, root_quat=root_q,
                                   fps=clip.fps, initial_q=[initial[n] for n in target.binding.joint_names],
-                                  orientations=orientations, config=recipe.solver,
+                                  orientations=orientations, directions=directions, config=recipe.solver,
                                   resume=journal.frames, on_frame=committed, stop_requested=stop_requested)
         candidate_arrays = {
             "root_p": sequence.root_p, "root_quat": sequence.root_quat, "q": sequence.q,
@@ -228,11 +242,14 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         if recipe.nominal_quality is not None:
             projected_arrays, quality_report = qualify_motion(candidate_arrays, sequence.position_residual_m,
                 sequence.orientation_residual_rad, robot_dir, recipe.nominal_quality)
+            _direction_quality(quality_report, sequence.direction_residual_rad, recipe, clip.frame_count)
             accepted = quality_report['accepted']
         disposition = ClipDisposition.SUCCEEDED if accepted else ClipDisposition.REJECTED
         provenance = {"source_sha256": source_sha, "source_group": source_group,
                       "shape_sha256": source_shape, "frame_time_literal": clip.frame_time_literal,
                       "frame_count": clip.frame_count, "recipe": asdict(recipe),
+                      "source_motion_id": str(motion.id), "source_roles": source_roles,
+                      "source_time_origin": "relative_clip_start",
                       "geometric_result": sequence.provenance(), "nominal_quality_result": quality_report,
                       "optimizer_goal_passed": sequence.feasible, "training_admitted": False}
         # Private work lives under the caller's persistent cache, never an implicit /tmp cache.
@@ -240,7 +257,9 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
             directory = Path(scratch)
             candidate = directory / "candidate.npz"
             np.savez(candidate, **candidate_arrays)
-            artifacts = {candidate.name: candidate}
+            shared_motion = directory / 'source-motion.json'
+            shared_motion.write_text(canonical_json(motion_to_dict(motion)))
+            artifacts = {candidate.name: candidate, shared_motion.name: shared_motion}
             if accepted:
                 motion = directory / "motion.npz"
                 np.savez(motion, **projected_arrays)
@@ -256,9 +275,24 @@ def retarget_clip(body, source: bytes, recipe: RetargetRecipe, *, expected_embod
         return RetargetReceipt(identity.key, entry.complete(), disposition, False, entry.path)
 
 
+def _direction_quality(report: dict, residuals, recipe: RetargetRecipe, frames: int) -> None:
+    """Nominal time/floor projection cannot erase a failed pose-direction objective."""
+    if not recipe.target.directions:
+        return
+    values = np.asarray(residuals, dtype=np.float64)
+    if (values.shape != (frames, len(recipe.target.directions))
+            or not np.isfinite(values).all() or np.any(values < 0)):
+        raise ValueError('Complete retained direction residuals required for nominal qualification')
+    passed = bool(np.all(values <= recipe.solver.direction_tolerance_rad))
+    report['checks']['direction_residual'] = passed
+    report['direction_tolerance_rad'] = recipe.solver.direction_tolerance_rad
+    report['max_direction_residual_rad'] = float(values.max())
+    report['accepted'] = bool(report['accepted'] and passed)
+
+
 def recipe_from_json(payload: bytes) -> RetargetRecipe:
     """One strict artifact boundary; job wire shapes remain platform protobufs."""
-    from .retarget_target import Landmark, TargetKind
+    from .retarget_target import Direction, Landmark, TargetKind
 
     def pairs(items):
         result = {}
@@ -276,14 +310,29 @@ def recipe_from_json(payload: bytes) -> RetargetRecipe:
     if not isinstance(raw, dict) or set(raw) != fields:
         raise ValueError("Retarget recipe fields differ from the supported artifact")
     target = raw["target"]
-    if not isinstance(target, dict) or set(target) != {"landmarks", "holds", "nominal_passive"}:
+    if isinstance(target, dict) and 'directions' not in target:
+        target['directions'] = []  # Explicit converter for pre-direction recipes.
+    if not isinstance(target, dict) or set(target) != {"landmarks", "holds", "nominal_passive", "directions"}:
         raise ValueError("Explicit target mapping, holds and passive positions required")
     landmarks = []
     for item in target["landmarks"]:
-        if not isinstance(item, dict) or set(item) != {"source", "target", "kind", "orientation", "weight"}:
+        if isinstance(item, dict) and 'position' not in item:
+            item['position'] = True
+        if not isinstance(item, dict) or set(item) != {"source", "target", "kind", "orientation", "weight", "position"}:
             raise ValueError("Unsupported landmark fields")
         landmarks.append(Landmark(**{**item, "kind": TargetKind(item["kind"])}))
-    raw["target"] = TargetProfile(tuple(landmarks), tuple(target["holds"]), tuple(target["nominal_passive"]))
+    directions = []
+    for item in target['directions']:
+        if isinstance(item, dict) and 'kind' not in item:
+            item['kind'] = TargetKind.LINK.value
+        if not isinstance(item, dict) or set(item) != set(Direction.__dataclass_fields__):
+            raise ValueError('Unsupported direction fields')
+        directions.append(Direction(**{**item, "kind": TargetKind(item["kind"])}))
+    raw["target"] = TargetProfile(tuple(landmarks), tuple(target["holds"]), tuple(target["nominal_passive"]), tuple(directions))
+    if isinstance(raw['solver'], dict) and not directions:
+        # Older recipes had no directional objectives; these defaults cannot change their fit.
+        raw['solver'].setdefault('direction_tolerance_rad', IKConfig().direction_tolerance_rad)
+        raw['solver'].setdefault('direction_weight', IKConfig().direction_weight)
     if not isinstance(raw["solver"], dict) or set(raw["solver"]) != set(IKConfig.__dataclass_fields__):
         raise ValueError("Every solver setting must be explicit")
     # Do not coerce booleans/numeric strings at the artifact boundary.
@@ -309,6 +358,8 @@ def recipe_from_json(payload: bytes) -> RetargetRecipe:
             numeric(value)
     for landmark in target["landmarks"]:
         numeric(landmark["weight"])
+    for direction in target["directions"]:
+        numeric(direction["weight"])
     for value in raw["solver"].values():
         numeric(value)
     segment_targets = []
@@ -378,6 +429,7 @@ def qualify_cached_candidate(source_directory: Path, recipe: RetargetRecipe, rob
             geometric = original_report['geometric_result']
             projected, quality_report = qualify_motion(arrays, geometric['position_residual_m'],
                 geometric['orientation_residual_rad'], robot_dir, recipe.nominal_quality)
+            _direction_quality(quality_report, geometric.get('direction_residual_rad'), recipe, len(arrays['q']))
             disposition = ClipDisposition.SUCCEEDED if quality_report['accepted'] else ClipDisposition.REJECTED
             report = {**original_report, 'recipe': asdict(recipe), 'nominal_quality_result': quality_report,
                 'optimizer_goal_passed': all(x == 'geometrically_feasible' for x in geometric['dispositions']),
@@ -389,6 +441,8 @@ def qualify_cached_candidate(source_directory: Path, recipe: RetargetRecipe, rob
                 output_report.write_text(canonical_json(report))
                 output_files = {'candidate.npz': candidate_path, 'retarget.json': output_report,
                                 'original-retarget.json': report_path}
+                if 'source-motion.json' in artifacts:
+                    output_files['source-motion.json'] = original.path / 'blobs' / artifacts['source-motion.json']['sha256']
                 if quality_report['accepted']:
                     motion = directory/'motion.npz'
                     np.savez(motion, **projected)
