@@ -70,6 +70,7 @@ def retarget_one(r: WholeBodyRetargeter, world: np.ndarray, path: Path, out: Pat
         "fps": clip.fps, "solve_seconds": round(seconds, 2), "mean_nfev": float(sol.nfev.mean()),
         "motion_sha256": hashlib.sha256((out / "motion.npz").read_bytes()).hexdigest(),
         "solve_site_position_error_max_m": dict(zip(sol.site_names, sol.position_error_m.max(0).round(4).tolist())),
+        "solver": {"max_joint_speed_rad_s": r.max_joint_speed, "cutoff_hz": cutoff_hz},
         "ground_shift_range_m": [float(r.ground_shift.min()), float(r.ground_shift.max())],
     })
     (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
