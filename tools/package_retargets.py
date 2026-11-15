@@ -6,7 +6,8 @@ JUDGMENTS.json: {"body": {...identity...}, "clips": [{"run_dir": ".../<clip>", "
 "judgment": "one line", "frames": "keyframes looked at", "mirror": false}, ...]}.
 Only accepted clips are copied to OUT_DIR/motions/ (the trainer's retargeted_npz directory);
 every judged clip, accepted or rejected, is listed in OUT_DIR/manifest.json with its metrics.
-With --volume the directory is uploaded to that Modal Volume under its own name (private bytes).
+With --volume the directory is uploaded to that Modal Volume (private bytes). Publishing refuses an
+existing destination: a published set is immutable because a paid training run may be reading it.
 """
 
 from __future__ import annotations
@@ -75,7 +76,14 @@ def main() -> None:
     if args.volume:
         subprocess.run(["modal", "volume", "create", args.volume], check=False, capture_output=True)
         dest = args.volume_path or out.name
-        subprocess.run(["modal", "volume", "put", "--force", args.volume, str(out), dest], check=True)
+        # A published motion set is immutable: a trainer may be reading it. A fix is a new version path.
+        listed = subprocess.run(["modal", "volume", "ls", args.volume, dest], capture_output=True, text=True)
+        if listed.returncode == 0 and listed.stdout.strip():
+            raise SystemExit(f"{args.volume}:/{dest} already exists; publish the change as a new version path")
+        subprocess.run(["modal", "volume", "put", args.volume, str(out), dest], check=True)
+        if args.flat:
+            subprocess.run(["modal", "volume", "put", args.volume, str(manifest_path), f"{dest}.manifest.json"],
+                           check=True)
         print(f"uploaded to modal volume {args.volume}:/{dest}")
 
 

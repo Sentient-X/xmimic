@@ -92,6 +92,10 @@ the dominant errors are arm segments at body joint-range limits (see below).
 | Claimed right_hip_roll range was unmirrored (wrong) | Read `jnt_axis` in the joint's local frame; in world the right axis is -X, so +roll abducts and [-0.28, 1.92] is correct | Always judge a range by FK of a distal point, never by local axis + numbers. A declared mirrored override made the cartwheel worse (right leg pinned at the new limit, 45 deg) and was withdrawn; the arm-yaw "offset" claim had no FK and was retracted |
 | Mirrored cartwheel legs do not split | Genuine 16 deg adduction limit on the leading leg plus the elbow cap | Rejected; the jumping jack, first rejected from the 3/4 view, matches in the front view and was accepted |
 
+Published sets are immutable: on 2026-11-16 an elbow fix overwrote ten files of
+`motions/demo-motions-v1` while a paid training run read that path. Fixes go to a new version
+(`demo-motions-v2`); the packager now refuses an existing destination.
+
 Stop conditions: a changed body identity means re-running every clip; never widen the screen
 after seeing results; never crop silently (`--window` is recorded in metrics.json). BVH, motions
 and renders are private (BONES-SEED license): `data/` is git-ignored.
