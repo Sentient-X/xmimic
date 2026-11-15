@@ -1,6 +1,6 @@
 """Derive an experiment robot bundle whose actuators follow Damiao datasheet torque ratings instead of nominal role gains.
 
-    python tools/datasheet_profile.py <robot_dir> <out_dir> [--check]
+    python tools/datasheet_profile.py <robot_dir> <out_dir> [--ratings ratings.json] [--check]
 
 Interim profile until sx-embodiments exports the real ratings: body geometry, inertials and embodiment_id are unchanged;
 only actuator effort, armature, PD gains and action scale change, and a sagittal mirror is added when the geometry gives one. Gains follow the
@@ -42,6 +42,19 @@ RATINGS = [
 # so the default only centres observations. A hand-set crouch is wrong here: the left and right knees have opposite axes.
 
 
+# Stated assumptions for drives the layer publishes no armature for (not datasheet numbers): reflected rotor inertia,
+# order of magnitude.
+ASSUMED_ARMATURE = {"damiao_dm10010": 0.05, "feetech_sts3215": 0.004}
+
+
+def layer_rating(entry: dict):
+    """(drive, effort, armature, source) from one joint of a ratings file exported from sx_embodiments.joint_rating."""
+    armature, source = entry["armature"], "sx-embodiments rating"
+    if armature is None:
+        armature, source = ASSUMED_ARMATURE[entry["drive"]], "sx-embodiments rating; armature assumed (not published)"
+    return entry["drive"], float(entry["effort"]), float(armature), source
+
+
 def rating(name: str):
     for pattern, motor, effort, armature, source in RATINGS:
         if re.search(pattern, name):
@@ -80,17 +93,18 @@ def geometric_mirror(scene: Path, joint_names: list[str]):
     return perm, signs
 
 
-def derive(robot: Path, out: Path) -> dict:
+def derive(robot: Path, out: Path, ratings: dict | None = None) -> dict:
     meta = json.loads((robot / "meta.json").read_text())
     scene = (robot / "scene.xml").read_text()
     shutil.copytree(robot, out, ignore=shutil.ignore_patterns("scene.xml", "meta.json"), symlinks=True)
     table, scales, defaults = [], [], []
     for name in meta["joint_names"]:
-        motor, effort, armature, source = rating(name)
+        motor, effort, armature, source = layer_rating(ratings["joints"][name]) if ratings else rating(name)
         kp, kd = armature * W * W, 2 * ZETA * armature * W
         q0 = float(meta["default_joint_pos"][meta["joint_names"].index(name)])
         table.append({"joint": name, "motor": motor, "effort_nm": effort, "armature": armature, "kp": round(kp, 4),
-                      "kd": round(kd, 4), "action_scale": round(0.25 * effort / kp, 4), "default": q0, "source": source})
+                      "kd": round(kd, 4), "action_scale": round(0.25 * effort / kp, 4), "default": q0, "source": source,
+                      "rated_velocity": ratings["joints"][name]["velocity"] if ratings else None})
         scales.append(0.25 * effort / kp)
         defaults.append(q0)
         joint = re.compile(rf'(<joint name="{re.escape(name)}"[^>]*?armature=")[^"]*(")')
@@ -112,7 +126,8 @@ def derive(robot: Path, out: Path) -> dict:
     mirror = geometric_mirror(robot / "scene.xml", meta["joint_names"])
     if mirror is not None and meta.get("mirror_permutation") is None:
         meta["mirror_permutation"], meta["mirror_signs"] = mirror
-    meta["actuator_profile"] = {"name": "damiao-embodiment-ratings-v2", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
+    meta["actuator_profile"] = {"name": "sx-embodiments-ratings" if ratings else "damiao-embodiment-ratings-v2",
+                                "ratings_source": ratings["source"] if ratings else "table in tools/datasheet_profile.py", "rule": "kp=arm*w^2, kd=2*zeta*arm*w, w=2pi*10, zeta=2, "
                                 "scale=0.25*effort/kp", "joints": table}
     (out / "scene.xml").write_text(scene)
     (out / "meta.json").write_text(json.dumps(meta))
@@ -179,10 +194,11 @@ def main():
     ap.add_argument("robot", type=Path)
     ap.add_argument("out", type=Path)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--ratings", type=Path, help="joint ratings exported from sx_embodiments.joint_rating (preferred)")
     a = ap.parse_args()
     if a.out.exists():
         raise SystemExit(f"{a.out} exists; derive into a new directory")
-    derive(a.robot, a.out)
+    derive(a.robot, a.out, json.loads(a.ratings.read_text()) if a.ratings else None)
     if a.check:
         result = check(a.out)
         (a.out / "pd-hold.json").write_text(json.dumps(result, indent=1))
